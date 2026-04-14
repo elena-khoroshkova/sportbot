@@ -616,7 +616,12 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.exception("Unhandled error while processing update: %r", update)
+        # PTB can call error handlers with update=None.
+        err = getattr(context, "error", None)
+        if err is not None:
+            logger.error("Unhandled error while processing update: %r", update, exc_info=err)
+        else:
+            logger.error("Unhandled error while processing update: %r", update)
 
     # Registration conversation
     conv = ConversationHandler(
@@ -628,6 +633,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
         allow_reentry=True,
+        per_message=True,
     )
 
     app.add_handler(conv)
