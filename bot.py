@@ -64,6 +64,98 @@ PRAISE_PHRASES = [
     "Вау, мощно! ✅",
 ]
 
+def _looks_ru(text: str) -> bool:
+    return any("А" <= ch <= "я" or ch in "Ёё" for ch in (text or ""))
+
+
+def _get_lang(update: Update, caption_or_text: str | None = None) -> str:
+    """
+    Best-effort language selection for replies.
+    Returns "ru" or "en".
+    """
+    # 1) Telegram user language code
+    lc = (getattr(update.effective_user, "language_code", None) or "").lower()
+    if lc.startswith("ru") or lc.startswith("uk") or lc.startswith("be"):
+        return "ru"
+
+    # 2) Content heuristic
+    if caption_or_text and _looks_ru(caption_or_text):
+        return "ru"
+
+    # 3) Stored preference (if any)
+    try:
+        prefs = (update.get_bot().get("user_lang") if False else None)  # placeholder
+    except Exception:
+        prefs = None
+    return "en"
+
+
+def _t(lang: str, key: str, **kwargs) -> str:
+    ru = {
+        "welcome": "👋 *Добро пожаловать в Sports Challenge!*\n\nРегистрация займёт всего 3 шага.\n\nШаг 1 — выбери вид спорта:",
+        "sport_chosen": "Отлично — *{sport}* 🎯\n\nШаг 2 — выбери уровень:",
+        "level_chosen": "Уровень *{level}* — принято 💪\n\nШаг 3 — отправь *корпоративный email*.",
+        "bad_email": "⚠️ Похоже, это не email.\nПопробуй ещё раз (например, name@company.com):",
+        "registered": (
+            "🎉 *Ты зарегистрирован(а)!*\n\n"
+            "🏅 Спорт: *{sport}*\n"
+            "📊 Уровень: *{level}*\n"
+            "📧 Email: `{email}`\n\n"
+            "{status}\n\n"
+            "👇 Вступай в группу челленджа:\n{link}\n\n"
+            "Каждый день будет напоминание в группе. Чтобы отметиться, используй `/checkin` (или кнопку) "
+            "и ответь фото/скрином *с подписью* одним сообщением. Поехали! 🚀"
+        ),
+        "cancel": "Регистрация отменена. Когда будешь готов(а), отправь /start.",
+        "need_caption_retry": "⚠️ Добавь подпись к фото/скрину (одним сообщением) и отправь ещё раз.",
+        "need_caption": "⚠️ Чтобы засчитать тренировку, отправь фото/скрин *с подписью* одним сообщением.",
+        "sheet_fail": "⚠️ Не получилось записать отметку в Google Sheets. Проверь `GOOGLE_*` и доступ к таблице, затем попробуй ещё раз.",
+        "praise": "{praise}\n\nСегодня отметились: {unique}",
+        "stats": "📊 *Статистика за {date}*\n\n✅ Отметились сегодня: *{unique}*\n🧾 Всего записей: *{total}*",
+        "reminder": (
+            "🌅 *Доброе утро!*\n\n"
+            "📅 {date}\n\n"
+            "💪 Нажми кнопку ниже (или напиши `/checkin`), затем *ответь на сообщение бота* фото/скрином с подписью — "
+            "и я отмечу тебя.\n\n"
+            "Каждый день — маленький шаг к цели. Поехали! 🚀"
+        ),
+        "checkin_prompt": "{mention}, ответь на это сообщение <b>фото/скрином</b> и добавь <b>подпись</b> — чем ты занимался(ась) сегодня.",
+        "checkin_ack": "Ок! Ответь фото/скрином с подписью.",
+    }
+    en = {
+        "welcome": "👋 *Welcome to the Sports Challenge!*\n\nI'll register you in 3 quick steps.\n\nStep 1 — choose your sport:",
+        "sport_chosen": "Great choice — *{sport}* 🎯\n\nStep 2 — choose your level:",
+        "level_chosen": "Level *{level}* — got it 💪\n\nStep 3 — send your *corporate email*.",
+        "bad_email": "⚠️ That doesn't look like a valid email.\nPlease try again (e.g. name@company.com):",
+        "registered": (
+            "🎉 *You're registered!*\n\n"
+            "🏅 Sport: *{sport}*\n"
+            "📊 Level: *{level}*\n"
+            "📧 Email: `{email}`\n\n"
+            "{status}\n\n"
+            "👇 Join the challenge group:\n{link}\n\n"
+            "Each day there will be a reminder in the group. To check in, use `/checkin` (or the button) "
+            "and reply with an image *with a caption* in one message. Let's go! 🚀"
+        ),
+        "cancel": "Registration cancelled. Send /start whenever you're ready.",
+        "need_caption_retry": "⚠️ Please add a caption to the image (one message) and send again.",
+        "need_caption": "⚠️ To log a workout, send a photo/screenshot *with a caption* in one message.",
+        "sheet_fail": "⚠️ Couldn't write to Google Sheets. Check `GOOGLE_*` env vars and sheet access, then try again.",
+        "praise": "{praise}\n\nChecked in today: {unique}",
+        "stats": "📊 *Stats for {date}*\n\n✅ People checked in: *{unique}*\n🧾 Total logs: *{total}*",
+        "reminder": (
+            "🌅 *Good morning!*\n\n"
+            "📅 {date}\n\n"
+            "💪 Tap the button below (or type `/checkin`), then *reply to the bot's message* with a photo/screenshot + caption.\n\n"
+            "Every rep counts. Let's go! 🚀"
+        ),
+        "checkin_prompt": "{mention}, reply to this message with a <b>photo/screenshot</b> and add a <b>caption</b> describing what you did.",
+        "checkin_ack": "Ok! Reply with an image + caption.",
+    }
+    table = ru if lang == "ru" else en
+    return table[key].format(**kwargs)
+
+
 def _sheet_client():
     creds = Credentials(
         token=None,
@@ -189,7 +281,7 @@ def upsert_checkin(tg_user, activity: str) -> str:
 
 
 def today_count() -> int:
-    """Return how many people logged a photo today."""
+    """Return total number of logs today (rows in daily sheet)."""
     try:
         spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
         date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
@@ -197,6 +289,18 @@ def today_count() -> int:
         return max(0, len(ws.get_all_records()))
     except Exception:
         return 0
+
+def today_stats() -> tuple[int, int]:
+    """Return (unique_users, total_logs) for today."""
+    try:
+        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
+        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
+        ws = _daily_ws(spreadsheet, date_str)
+        recs = ws.get_all_records()
+        ids = {str(r.get("Telegram ID")).strip() for r in recs if str(r.get("Telegram ID")).strip()}
+        return (len(ids), len(recs))
+    except Exception:
+        return (0, 0)
 
 
 # ── Bot handlers ──────────────────────────────────────────────────────────────
@@ -216,10 +320,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⭐ Other",     callback_data="sport_Other"),
         ],
     ]
+    lang = _get_lang(update)
     await update.message.reply_text(
-        "👋 *Добро пожаловать в Sports Challenge!*\n\n"
-        "Регистрация займёт всего 3 шага.\n\n"
-        "Шаг 1 — выбери вид спорта:",
+        _t(lang, "welcome"),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -238,9 +341,9 @@ async def sport_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔥 Regular",  callback_data="level_Regular")],
         [InlineKeyboardButton("⚡ Pro",       callback_data="level_Pro")],
     ]
+    lang = _get_lang(update, sport)
     await query.edit_message_text(
-        f"Отлично — *{sport}* 🎯\n\n"
-        "Шаг 2 — выбери уровень:",
+        _t(lang, "sport_chosen", sport=sport),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -254,9 +357,9 @@ async def level_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     level = query.data.replace("level_", "")
     context.user_data["level"] = level
 
+    lang = _get_lang(update, level)
     await query.edit_message_text(
-        f"Уровень *{level}* — принято 💪\n\n"
-        "Шаг 3 — отправь *корпоративный email*.",
+        _t(lang, "level_chosen", level=level),
         parse_mode="Markdown",
     )
     return EMAIL
@@ -264,11 +367,11 @@ async def level_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = update.message.text.strip()
+    lang = _get_lang(update, email)
 
     if not re.match(r"^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$", email):
         await update.message.reply_text(
-            "⚠️ Похоже, это не email.\n"
-            "Попробуй ещё раз (например, name@company.com):"
+            _t(lang, "bad_email")
         )
         return EMAIL
 
@@ -283,22 +386,27 @@ async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     link = GROUP_INVITE_LINK or "_(ask your admin for the group link)_"
     status_line = "✅ Записала в таблицу!" if saved_ok else "⚠️ Не получилось записать в таблицу — пожалуйста, напиши администратору."
+    if lang == "en":
+        status_line = "✅ Saved to the spreadsheet!" if saved_ok else "⚠️ Couldn't write to the spreadsheet — please contact the admin."
 
     await update.message.reply_text(
-        f"🎉 *Ты зарегистрирован(а)!*\n\n"
-        f"🏅 Спорт: *{context.user_data['sport']}*\n"
-        f"📊 Уровень: *{context.user_data['level']}*\n"
-        f"📧 Email: `{email}`\n\n"
-        f"{status_line}\n\n"
-        f"👇 Вступай в группу челленджа:\n{link}\n\n"
-        f"Каждый день будет напоминание в группе. Чтобы отметиться, используй `/checkin` (или кнопку) и ответь фото/скрином *с подписью* одним сообщением. Поехали! 🚀",
+        _t(
+            lang,
+            "registered",
+            sport=context.user_data["sport"],
+            level=context.user_data["level"],
+            email=email,
+            status=status_line,
+            link=link,
+        ),
         parse_mode="Markdown",
     )
     return ConversationHandler.END
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Регистрация отменена. Когда будешь готов(а), отправь /start.")
+    lang = _get_lang(update)
+    await update.message.reply_text(_t(lang, "cancel"))
     return ConversationHandler.END
 
 
@@ -337,6 +445,7 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     user = update.effective_user
+    lang = _get_lang(update, msg.caption or "")
 
     pending_all = context.application.bot_data.get("pending_checkins") or {}
     pending = pending_all.get(str(user.id))
@@ -349,7 +458,7 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         caption = (msg.caption or "").strip()
         if not caption:
-            await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением) и отправь ещё раз.")
+            await msg.reply_text(_t(lang, "need_caption_retry"))
             return
         activity = caption
         # consume pending check-in once a valid reply arrives
@@ -364,45 +473,50 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         caption = (msg.caption or "").strip()
         if not caption:
             await msg.reply_text(
-                "⚠️ Чтобы засчитать тренировку, отправь фото/скрин *с подписью* одним сообщением.",
-                parse_mode="Markdown",
+                _t(lang, "need_caption"),
+                parse_mode="Markdown" if lang == "ru" else "Markdown",
             )
             return
         activity = caption
 
     try:
-        status = upsert_checkin(user, activity=activity)
+        # Allow multiple logs per day: always append a new row
+        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
+        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
+        ws = _daily_ws(spreadsheet, date_str)
+        _ensure_daily_header(ws)
+        ws.append_row([
+            user.id,
+            user.full_name,
+            (activity or "").strip(),
+            "✅",
+            datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M"),
+        ])
+        status = "new"
     except Exception as e:
         logger.error("Failed to mark photo in sheet: %s", e)
-        await msg.reply_text(
-            "⚠️ Не получилось записать отметку в Google Sheets. "
-            "Проверьте `GOOGLE_*` переменные окружения и доступ к таблице, затем попробуйте ещё раз.",
-        )
+        await msg.reply_text(_t(lang, "sheet_fail"))
         return
 
     if status in {"new", "updated"}:
-        try:
-            count = today_count()
-        except Exception:
-            count = 0
+        unique, total = today_stats()
         praise = random.choice(PRAISE_PHRASES)
-        if status == "updated":
-            await msg.reply_text(f"✅ Обновила подпись.\n\n{praise}\n\nСегодня отметились: {count}")
-        else:
-            await msg.reply_text(f"{praise}\n\nСегодня отметились: {count}")
+        if lang == "en":
+            # quick English praise set
+            praise = random.choice(["Nice! Keep it up 💪", "Logged ✅ Great job!", "Awesome work 🔥", "Done ✅", "Great consistency 🚀"])
+        await msg.reply_text(_t(lang, "praise", praise=praise, unique=unique, total=total))
     else:
-        await msg.reply_text(
-            f"👏 {user.first_name}, ты уже отмечался(ась) сегодня — так держать!",
-        )
+        # With multiple logs enabled, this branch should not happen, keep a safe message
+        await msg.reply_text(_t(lang, "praise", praise=random.choice(PRAISE_PHRASES), unique=today_stats()[0], total=today_stats()[1]))
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command: show how many people posted today."""
-    count = today_count()
+    lang = _get_lang(update)
+    unique, total = today_stats()
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
     await update.message.reply_text(
-        f"📊 *Статистика за {date_str}*\n\n"
-        f"✅ Отметились сегодня: *{count}*",
+        _t(lang, "stats", date=date_str, unique=unique, total=total),
         parse_mode="Markdown",
     )
 
@@ -421,12 +535,7 @@ async def daily_reminder(app: Application):
         )
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
-            text=(
-                f"🌅 *Доброе утро!*\n\n"
-                f"📅 {date_str}\n\n"
-                f"💪 Нажми кнопку ниже (или напиши `/checkin`), затем *ответь на сообщение бота* фото/скрином с подписью — и я отмечу тебя на сегодня.\n\n"
-                f"Каждый день — маленький шаг к цели. Поехали! 🚀"
-            ),
+            text=_t("ru", "reminder", date=date_str),
             parse_mode="Markdown",
             reply_markup=keyboard,
         )
@@ -453,10 +562,15 @@ async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
         pending = {}
         bot_data["pending_checkins"] = pending
 
-    prompt_text = (
-        f"{_user_mention_html(user)}, ответь на это сообщение <b>фото/скрином</b> и добавь "
-        f"<b>подпись</b> — чем ты занимался(ась) сегодня."
-    )
+    # pick language from user
+    lang = "ru"
+    try:
+        lc = (getattr(user, "language_code", None) or "").lower()
+        if lc and not lc.startswith(("ru", "uk", "be")):
+            lang = "en"
+    except Exception:
+        pass
+    prompt_text = _t(lang, "checkin_prompt", mention=_user_mention_html(user))
     try:
         # PTB v21 uses reply_parameters under the hood; avoid allow_sending_without_reply here.
         prompt = await message.reply_text(prompt_text, parse_mode="HTML")
@@ -464,7 +578,7 @@ async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
         # Fallback: send as a normal message if replying fails for any reason
         prompt = await bot.send_message(
             chat_id=message.chat_id,
-            text="Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
+            text=_t(lang, "checkin_ack"),
         )
 
     pending[str(user.id)] = {
@@ -511,7 +625,14 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
     user = query.from_user
 
     bot_data = context.application.bot_data
-    await query.answer("Ок! Ответь фото/скрином с подписью.", show_alert=False)
+    lang = "ru"
+    try:
+        lc = (getattr(query.from_user, "language_code", None) or "").lower()
+        if lc and not lc.startswith(("ru", "uk", "be")):
+            lang = "en"
+    except Exception:
+        pass
+    await query.answer(_t(lang, "checkin_ack"), show_alert=False)
     await _start_checkin_prompt(
         message=msg,
         user=user,
