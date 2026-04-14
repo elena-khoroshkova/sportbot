@@ -78,7 +78,16 @@ from google.oauth2.service_account import Credentials
 # ─── НАСТРОЙКИ ───────────────────────────────────────────────
 BOT_TOKEN = "8760645112:AAH1VKqfmOf9pEWhhMsaG5DWUMErTwNYIyQ"
 SPREADSHEET_ID = "1JQkN_ZbSaO3-J4WtWGkNGaZkOsBcHwNcqKoFMIhJKQI"
-CREDENTIALS_FILE = "/Users/xoroshok/Downloads/credentials.json"
+import json, tempfile, os
+
+_creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
+if _creds_json:
+    _tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    _tmp.write(_creds_json)
+    _tmp.flush()
+    CREDENTIALS_FILE = _tmp.name
+else:
+    CREDENTIALS_FILE = "/Users/xoroshok/Downloads/credentials.json"  # локально
 
 ADMIN_IDS = [307404504]
 # ─────────────────────────────────────────────────────────────
