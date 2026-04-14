@@ -374,7 +374,7 @@ async def daily_reminder(app: Application):
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%A, %B %d")
     try:
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("✅ Отметить тренировку", callback_data="start_checkin")]]
+            [[InlineKeyboardButton("✅ /checkin", callback_data="checkin")]]
         )
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
@@ -401,8 +401,55 @@ def _user_mention_html(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
+async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
+    """Send (and track) a per-user prompt message to reply to with image+caption."""
+    now = datetime.now(pytz.timezone(TIMEZONE))
+
+    pending = bot_data.get("pending_checkins")
+    if not isinstance(pending, dict):
+        pending = {}
+        bot_data["pending_checkins"] = pending
+
+    prompt_text = (
+        f"{_user_mention_html(user)}, ответь на это сообщение <b>фото/скрином</b> и добавь "
+        f"<b>подпись</b> — чем ты занимался(ась) сегодня."
+    )
+    try:
+        prompt = await message.reply_text(
+            prompt_text,
+            parse_mode="HTML",
+            allow_sending_without_reply=True,
+        )
+    except Exception:
+        prompt = await message.reply_text(
+            "Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
+            allow_sending_without_reply=True,
+        )
+
+    pending[str(user.id)] = {
+        "chat_id": message.chat_id,
+        "prompt_message_id": prompt.message_id,
+        "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
+    }
+
+
+async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Group command: start check-in prompt (same as button)."""
+    msg = update.message
+    if not msg:
+        return
+    if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
+        return
+    await _start_checkin_prompt(
+        message=msg,
+        user=update.effective_user,
+        bot=context.bot,
+        bot_data=context.application.bot_data,
+    )
+
+
 async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button click: ask user to reply with image+caption, then log on reply."""
+    """Inline button click: start check-in prompt (same as /checkin)."""
     query = update.callback_query
     if not query:
         return
@@ -416,43 +463,19 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     data = query.data or ""
-    if data != "start_checkin":
+    if data != "checkin":
         return
 
     user = query.from_user
 
     bot_data = context.application.bot_data
-    pending = bot_data.get("pending_checkins")
-    if not isinstance(pending, dict):
-        pending = {}
-        bot_data["pending_checkins"] = pending
-
-    now = datetime.now(pytz.timezone(TIMEZONE))
-    # Send a prompt message that the user must reply to with image + caption
-    prompt_text = (
-        f"{_user_mention_html(user)}, ответь на это сообщение <b>фото/скрином</b> и добавь "
-        f"<b>подпись</b> — чем ты занимался(ась) сегодня."
-    )
-    try:
-        prompt = await msg.reply_text(
-            prompt_text,
-            parse_mode="HTML",
-            allow_sending_without_reply=True,
-        )
-    except Exception:
-        # Fallback: no formatting, no mention
-        prompt = await msg.reply_text(
-            "Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
-            allow_sending_without_reply=True,
-        )
-
-    pending[str(user.id)] = {
-        "chat_id": msg.chat_id,
-        "prompt_message_id": prompt.message_id,
-        "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
-    }
-
     await query.answer("Ок! Ответь фото/скрином с подписью.", show_alert=False)
+    await _start_checkin_prompt(
+        message=msg,
+        user=user,
+        bot=context.bot,
+        bot_data=bot_data,
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -474,7 +497,8 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^start_checkin$"))
+    app.add_handler(CommandHandler("checkin", cmd_checkin))
+    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^checkin$"))
     app.add_handler(
         MessageHandler(
             (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
