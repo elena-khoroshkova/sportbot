@@ -428,7 +428,11 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             media_label = "document"
         append_checkin_to_sheet(user, activity=activity, media_kind=media_label, file_id=file_id)
     except Exception as e:
-        logger.error("Failed to mark photo in sheet: %s", e)
+        logger.exception(
+            "Failed to mark photo in sheet (%s): %r",
+            type(e).__name__,
+            e,
+        )
         await msg.reply_text(
             "⚠️ Не получилось записать отметку в Google Sheets. "
             "Проверь `GOOGLE_*` и доступ к таблице, затем попробуй ещё раз."
