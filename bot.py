@@ -246,10 +246,21 @@ async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     user = update.effective_user
-    is_new = mark_photo(user)
+    try:
+        is_new = mark_photo(user)
+    except Exception as e:
+        logger.error("Failed to mark photo in sheet: %s", e)
+        await msg.reply_text(
+            "⚠️ Не получилось записать отметку в Google Sheets. "
+            "Проверьте `GOOGLE_*` переменные окружения и доступ к таблице, затем попробуйте ещё раз.",
+        )
+        return
 
     if is_new:
-        count = today_count()
+        try:
+            count = today_count()
+        except Exception:
+            count = 0
         await msg.reply_text(
             f"✅ *{user.first_name}*, workout logged! Great job 🔥\n"
             f"_{count} participant(s) done so far today._",
@@ -316,7 +327,12 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.GROUPS, handle_group_photo))
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+            handle_group_photo,
+        )
+    )
 
     # Daily scheduler
     tz = pytz.timezone(TIMEZONE)
