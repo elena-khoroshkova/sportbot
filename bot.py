@@ -258,10 +258,31 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when someone posts a photo in the group chat."""
+def _extract_image_kind(msg) -> str | None:
+    """Return 'photo' or 'document' if message contains an image, else None."""
+    if msg.photo:
+        return "photo"
+    doc = msg.document
+    if not doc:
+        return None
+    mime = (doc.mime_type or "").lower()
+    if mime.startswith("image/"):
+        return "document"
+    # Some clients may send without mime_type; fall back to extension
+    name = (doc.file_name or "").lower()
+    if name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return "document"
+    return None
+
+
+async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fires when someone posts a workout photo/screenshot in the group chat."""
     msg = update.message
-    if not msg or not msg.photo:
+    if not msg:
+        return
+
+    image_kind = _extract_image_kind(msg)
+    if not image_kind:
         return
 
     # Ignore if not in the configured group
@@ -272,7 +293,7 @@ async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     pending = (context.application.bot_data.get("pending_checkins") or {}).get(str(user.id))
     now_ts = datetime.now(pytz.timezone(TIMEZONE)).timestamp()
-    activity = "Photo"
+    activity = "Photo" if image_kind == "photo" else "Screenshot"
     if pending and pending.get("chat_id") == msg.chat_id and pending.get("expires_at", 0) >= now_ts:
         activity = pending.get("activity") or activity
         # consume pending check-in once a photo arrives
@@ -423,8 +444,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^checkin_"))
     app.add_handler(
         MessageHandler(
-            filters.PHOTO & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
-            handle_group_photo,
+            (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+            handle_group_image,
         )
     )
 
