@@ -44,8 +44,24 @@ client_config = {
 
 flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
 
-# Console flow: prints a URL, you paste back the code — no local server needed
-creds = flow.run_console()
+USE_LOCAL_SERVER = os.environ.get("OAUTH_LOCAL_SERVER", "1").strip().lower() not in {"0", "false", "no"}
+
+# Newer google-auth-oauthlib versions no longer expose run_console().
+# Default to local server flow (opens browser, listens on localhost).
+if USE_LOCAL_SERVER:
+    creds = flow.run_local_server(
+        port=0,
+        open_browser=True,
+    )
+else:
+    # Best-effort fallback: some older versions support run_console()
+    if hasattr(flow, "run_console"):
+        creds = flow.run_console()
+    else:
+        raise SystemExit(
+            "Your google-auth-oauthlib version does not support run_console(). "
+            "Re-run with OAUTH_LOCAL_SERVER=1 (default) to use the local server flow."
+        )
 
 print("\n" + "=" * 60)
 print("SUCCESS! Copy this refresh token into your Railway env vars")
