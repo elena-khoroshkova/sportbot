@@ -38,6 +38,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Bump this string when debugging deployments.
+APP_VERSION = "2026-04-14-ptb21-reply-fix-ru-only"
+
 # ── Environment variables ─────────────────────────────────────────────────────
 BOT_TOKEN            = os.environ["BOT_TOKEN"]
 GOOGLE_SHEET_ID      = os.environ["GOOGLE_SHEET_ID"]
@@ -544,6 +547,8 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
 
 def main():
     async def post_init(app: Application):
+        logger.info("App version: %s", APP_VERSION)
+
         # Ensure we are not fighting with an old webhook/polling session during redeploys.
         try:
             await app.bot.delete_webhook(drop_pending_updates=True)
