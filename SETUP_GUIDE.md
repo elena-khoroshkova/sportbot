@@ -1,85 +1,110 @@
-# 🏋️ Sports Challenge Telegram Bot — Setup Guide
+# 🏋️ Telegram-бот Sports Challenge — руководство по установке
 
-This guide walks you through everything you need to get the bot running on Railway (free tier).
-
----
-
-## What the bot does
-
-- Users DM the bot → pick their **sport**, **level** (Newbie / Regular / Pro), enter **corporate email**
-- Bot sends them the **group invite link**
-- Every morning the bot posts a **reminder** in the group: *"Post your workout photo!"*
-- When someone posts a photo, the bot **reacts**, confirms it, and marks the user as ✅ in Google Sheets
-- All registrations and daily logs are stored in a **Google Sheet**
+Это руководство проведёт вас через все шаги, чтобы запустить бота на Railway (бесплатный тариф).
 
 ---
 
-## Step 1 — Create your Telegram bot
+## Что умеет бот
 
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot` and follow the prompts (choose a name and username ending in `bot`)
-3. BotFather will give you a **Bot Token** — save it (looks like `7123456789:AAFxxxxxx`)
-4. Optionally set a description with `/setdescription` and a profile photo with `/setuserpic`
-
----
-
-## Step 2 — Create your Telegram group and get its ID
-
-1. Create a new Telegram group (this is your challenge group)
-2. Add your bot to the group and **make it an Admin** (it needs permission to send messages and read photos)
-3. Create a permanent invite link: group **Settings → Invite Links → Create Link** — save it
-4. To find the **Group Chat ID**:
-   - Add [@userinfobot](https://t.me/userinfobot) to the group temporarily
-   - It will post the group's chat ID (a negative number like `-1001234567890`)
-   - Remove @userinfobot after you have the ID
+- Пользователи пишут боту в личные сообщения → выбирают **вид спорта**, **уровень** (Newbie / Regular / Pro), вводят **корпоративный email**
+- Бот отправляет им **ссылку-приглашение в группу**
+- Каждое утро бот публикует в группе **напоминание**: *"Опубликуйте фото тренировки!"*
+- Когда кто-то публикует фото, бот **реагирует**, подтверждает его и отмечает пользователя ✅ в Google Sheets
+- Все регистрации и ежедневные отметки хранятся в **Google Sheet**
 
 ---
 
-## Step 3 — Set up Google Sheets
+## Шаг 1 — Создайте Telegram-бота
 
-### 3a — Create the spreadsheet
-1. Go to [sheets.google.com](https://sheets.google.com) and create a new spreadsheet
-2. Name it something like **Sports Challenge Tracker**
-3. Copy the **Spreadsheet ID** from the URL:
-   - URL looks like: `https://docs.google.com/spreadsheets/d/`**`1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms`**`/edit`
-   - The bold part is your Spreadsheet ID — save it
-
-### 3b — Create a Google Cloud service account
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project (e.g. "Sports Bot")
-3. Go to **APIs & Services → Enable APIs** → search for and enable **Google Sheets API**
-4. Go to **APIs & Services → Credentials → Create Credentials → Service Account**
-5. Give it any name (e.g. `sports-bot`), click **Done**
-6. Click the service account you just created → **Keys** tab → **Add Key → Create new key → JSON**
-7. A JSON file will download — open it in a text editor and **copy the entire contents**
-
-### 3c — Share the spreadsheet with the service account
-1. In the downloaded JSON, find the `"client_email"` field (looks like `sports-bot@yourproject.iam.gserviceaccount.com`)
-2. Open your Google Sheet → **Share** → paste that email → give it **Editor** access
-3. Click **Send** (ignore the "this email doesn't have a Google account" warning — it's fine)
+1. Откройте Telegram и найдите **@BotFather**
+2. Отправьте `/newbot` и следуйте инструкциям (выберите имя и username, заканчивающийся на `bot`)
+3. BotFather выдаст вам **Bot Token** — сохраните его (выглядит как `7123456789:AAFxxxxxx`)
+4. По желанию задайте описание через `/setdescription` и аватар через `/setuserpic`
 
 ---
 
-## Step 4 — Deploy on Railway
+## Шаг 2 — Создайте Telegram-группу и узнайте её ID
 
-1. Go to [railway.app](https://railway.app) and sign up (free with GitHub)
-2. Click **New Project → Deploy from GitHub repo**
-   - Push the bot files to a GitHub repo first (see below), or use **Deploy from template**
-3. After connecting the repo, click your service → **Variables** tab → add these:
+1. Создайте новую Telegram-группу (это будет группа вашего челленджа)
+2. Добавьте бота в группу и **сделайте его администратором** (ему нужны права отправлять сообщения и читать фото)
+3. Создайте постоянную ссылку-приглашение: **Settings → Invite Links → Create Link** — сохраните её
+4. Чтобы узнать **Group Chat ID**:
+   - Временно добавьте [@userinfobot](https://t.me/userinfobot) в группу
+   - Он отправит chat ID группы (отрицательное число вроде `-1001234567890`)
+   - Удалите @userinfobot после того, как получите ID
 
-| Variable | Value |
+---
+
+## Шаг 3 — Настройте Google Sheets
+
+### 3a — Создайте таблицу
+1. Перейдите на [sheets.google.com](https://sheets.google.com) и создайте новую таблицу
+2. Назовите её, например, **Sports Challenge Tracker**
+3. Скопируйте **Spreadsheet ID** из URL:
+   - URL выглядит так: `https://docs.google.com/spreadsheets/d/`**`1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms`**`/edit`
+   - Выделенная часть — это Spreadsheet ID, сохраните его
+
+### 3b — Включите Google Sheets API
+1. Перейдите в [console.cloud.google.com](https://console.cloud.google.com)
+2. Создайте новый проект (например, "Sports Bot")
+3. Откройте **APIs & Services → Enable APIs** → найдите и включите **Google Sheets API**
+
+### 3c — Создайте OAuth-клиент (Desktop app)
+1. В Google Cloud Console откройте **APIs & Services → OAuth consent screen**
+2. Настройте экран согласия (если попросит):
+   - Выберите **External** (если нет Google Workspace-ограничений) или вариант, который подходит вашей организации
+   - Заполните обязательные поля (название приложения и т.д.)
+3. Откройте **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+4. Выберите тип приложения **Desktop app**
+5. Сохраните значения **Client ID** и **Client secret** — они понадобятся для переменных:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+
+### 3d — Получите `GOOGLE_REFRESH_TOKEN`
+Бот использует OAuth refresh token, чтобы иметь доступ к вашей таблице без ручного входа.
+
+1. Локально (на своём компьютере) установите зависимость:
+
+```bash
+pip install google-auth-oauthlib
+```
+
+2. Установите переменные окружения (или заполните `.env` для локального запуска):
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+3. Запустите скрипт:
+
+```bash
+python get_refresh_token.py
+```
+
+4. Откройте ссылку, войдите в Google-аккаунт, выдайте доступ
+5. Скопируйте выведенное значение refresh token в `GOOGLE_REFRESH_TOKEN` (в Railway и/или в `.env`)
+
+---
+
+## Шаг 4 — Задеплойте на Railway
+
+1. Перейдите на [railway.app](https://railway.app) и зарегистрируйтесь (бесплатно через GitHub)
+2. Нажмите **New Project → Deploy from GitHub repo**
+   - Сначала загрузите файлы бота в GitHub-репозиторий (см. ниже) или используйте **Deploy from template**
+3. После подключения репозитория откройте ваш сервис → вкладка **Variables** → добавьте переменные:
+
+| Переменная | Значение |
 |---|---|
-| `BOT_TOKEN` | Your token from BotFather |
-| `GOOGLE_SHEET_ID` | Your spreadsheet ID |
-| `GOOGLE_CREDENTIALS_JSON` | Paste the entire JSON from Step 3b (as one line) |
-| `GROUP_CHAT_ID` | Your group's chat ID (e.g. `-1001234567890`) |
-| `GROUP_INVITE_LINK` | Your group's invite link |
-| `DAILY_NOTIFY_TIME` | Time to send daily reminder in `HH:MM` format (e.g. `09:00`) |
-| `TIMEZONE` | Your timezone (e.g. `Europe/Kyiv`, `Europe/London`, `America/New_York`) |
+| `BOT_TOKEN` | Токен от BotFather |
+| `GOOGLE_SHEET_ID` | Spreadsheet ID вашей таблицы |
+| `GOOGLE_CLIENT_ID` | OAuth Client ID (из шага 3c) |
+| `GOOGLE_CLIENT_SECRET` | OAuth Client secret (из шага 3c) |
+| `GOOGLE_REFRESH_TOKEN` | Refresh token (из шага 3d) |
+| `GROUP_CHAT_ID` | Chat ID группы (например, `-1001234567890`) |
+| `GROUP_INVITE_LINK` | Ссылка-приглашение в группу |
+| `DAILY_NOTIFY_TIME` | Время ежедневного напоминания в формате `HH:MM` (например, `09:00`) |
+| `TIMEZONE` | Ваш часовой пояс (например, `Europe/Kyiv`, `Europe/London`, `America/New_York`) |
 
-4. Railway will auto-deploy. Your bot is now live 24/7!
+4. Railway задеплоит проект автоматически. Бот будет работать 24/7.
 
-### Pushing to GitHub (if needed)
+### Загрузка в GitHub (если нужно)
 ```bash
 git init
 git add bot.py requirements.txt Procfile
@@ -90,59 +115,59 @@ git push -u origin main
 
 ---
 
-## Step 5 — Test it
+## Шаг 5 — Протестируйте
 
-1. DM your bot on Telegram and send `/start`
-2. Go through the registration flow
-3. Check your Google Sheet — you should see a **Participants** tab with your entry
-4. Post a photo in the group — the bot should reply and log you in a daily tab
+1. Напишите боту в личные сообщения в Telegram и отправьте `/start`
+2. Пройдите регистрацию
+3. Проверьте Google Sheet — должна появиться вкладка **Participants** с вашей записью
+4. Отправьте фото в группу — бот должен ответить и записать отметку на дневной вкладке
 
 ---
 
-## Google Sheets structure
+## Структура Google Sheets
 
-The bot creates two types of tabs automatically:
+Бот автоматически создаёт два типа вкладок:
 
-**Participants** tab — one row per registered user:
+**Participants** — по одной строке на каждого зарегистрированного пользователя:
 | Telegram ID | Full Name | Username | Sport | Level | Corporate Email | Registered At |
 
-**Daily tabs** (e.g. `2026-04-06`) — created each day when someone posts:
+**Дневные вкладки** (например, `2026-04-06`) — создаются в те дни, когда кто-то публикует пост:
 | Telegram ID | Full Name | Photo ✅ | Time |
 
 ---
 
-## Commands
+## Команды
 
-| Command | Where | What it does |
+| Команда | Где | Что делает |
 |---|---|---|
-| `/start` | DM with bot | Starts registration |
-| `/cancel` | DM with bot | Cancels registration |
-| `/stats` | Anywhere | Shows how many people logged today |
+| `/start` | ЛС с ботом | Запускает регистрацию |
+| `/cancel` | ЛС с ботом | Отменяет регистрацию |
+| `/stats` | Где угодно | Показывает, сколько людей отметилось сегодня |
 
 ---
 
-## Troubleshooting
+## Решение проблем
 
-**Bot doesn't respond in the group**
-→ Make sure the bot is an Admin in the group with "Read Messages" permission
+**Бот не отвечает в группе**
+→ Убедитесь, что бот — администратор группы и у него есть право "Read Messages"
 
-**Google Sheets not updating**
-→ Double-check the service account email is shared on the sheet with Editor access
+**Google Sheets не обновляется**
+→ Проверьте, что корректно заданы `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` и `GOOGLE_SHEET_ID` (и что вы выдавали доступ именно тому Google-аккаунту, который должен писать в таблицу)
 
-**"MODULE_NOT_FOUND" on Railway**
-→ Make sure `requirements.txt` is in the root of your repo
+**Ошибка "MODULE_NOT_FOUND" на Railway**
+→ Убедитесь, что `requirements.txt` лежит в корне репозитория
 
-**Getting the Chat ID on Telegram Web**
-→ Open the group in web.telegram.org — the URL will show the chat ID after the `#` sign
-
----
-
-## Need to change something?
-
-- **Change activities or levels**: edit the keyboard buttons in `bot.py` (search for `sport_Running`, `level_Newbie`)
-- **Change reminder message**: edit the `daily_reminder()` function in `bot.py`
-- **Change notification time**: update the `DAILY_NOTIFY_TIME` environment variable on Railway
+**Как получить Chat ID в Telegram Web**
+→ Откройте группу в web.telegram.org — в URL после символа `#` будет указан chat ID
 
 ---
 
-*Built with python-telegram-bot, gspread, and APScheduler.*
+## Нужно что-то изменить?
+
+- **Изменить активности или уровни**: отредактируйте кнопки клавиатуры в `bot.py` (ищите `sport_Running`, `level_Newbie`)
+- **Изменить текст напоминания**: отредактируйте функцию `daily_reminder()` в `bot.py`
+- **Изменить время уведомления**: обновите переменную окружения `DAILY_NOTIFY_TIME` в Railway
+
+---
+
+*Сделано на python-telegram-bot, gspread и APScheduler.*
