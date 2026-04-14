@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import html
+import asyncio
 from datetime import datetime
 
 import pytz
@@ -543,6 +544,13 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
 
 def main():
     async def post_init(app: Application):
+        # Ensure we are not fighting with an old webhook/polling session during redeploys.
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            await asyncio.sleep(2)
+        except Exception as e:
+            logger.warning("Failed to delete webhook: %s", e)
+
         # Register commands so Telegram shows them in UI for DMs and groups
         private_cmds = [
             BotCommand("start", "Начать регистрацию"),
