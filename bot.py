@@ -67,7 +67,7 @@ for _h in _root.handlers:
     _h.addFilter(_RedactTokenFilter())
 
 # Bump this string when debugging deployments.
-APP_VERSION = "2026-04-14-log-redaction-v2"
+APP_VERSION = "2026-04-14-sheets-trace-v1"
 
 # ── Environment variables ─────────────────────────────────────────────────────
 BOT_TOKEN            = os.environ["BOT_TOKEN"]
@@ -615,6 +615,9 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
+    async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.exception("Unhandled error while processing update: %r", update)
+
     # Registration conversation
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
@@ -637,6 +640,7 @@ def main():
             handle_group_image,
         )
     )
+    app.add_error_handler(_on_error)
 
     # Daily scheduler
     tz = pytz.timezone(TIMEZONE)
