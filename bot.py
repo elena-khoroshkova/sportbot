@@ -45,6 +45,8 @@ SPORT, LEVEL, EMAIL = range(3)
 # ── Google Sheets helpers ─────────────────────────────────────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+PENDING_CHECKIN_TTL_SECONDS = 10 * 60  # 10 minutes
+
 def _sheet_client():
     creds = Credentials(
         token=None,
@@ -73,8 +75,8 @@ def _daily_ws(spreadsheet, date_str: str):
     try:
         return spreadsheet.worksheet(date_str)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(date_str, rows=500, cols=4)
-        ws.append_row(["Telegram ID", "Full Name", "Photo ✅", "Time"])
+        ws = spreadsheet.add_worksheet(date_str, rows=500, cols=5)
+        ws.append_row(["Telegram ID", "Full Name", "Activity", "Done ✅", "Time"])
         return ws
 
 
@@ -101,11 +103,31 @@ def save_participant(user_data: dict, tg_user) -> None:
     ws.append_row(row)
 
 
-def mark_photo(tg_user) -> bool:
+def _ensure_daily_header(ws) -> None:
+    """Best-effort: ensure daily worksheet has expected header columns."""
+    try:
+        header = ws.row_values(1)
+        expected = ["Telegram ID", "Full Name", "Activity", "Done ✅", "Time"]
+        if header == expected:
+            return
+        if not header:
+            ws.update("A1:E1", [expected])
+            return
+        # If old header is present, patch it in place (keeping any extra cols)
+        padded = (header + [""] * 5)[:5]
+        if padded != expected:
+            ws.update("A1:E1", [expected])
+    except Exception:
+        # Don't block check-ins if header update fails
+        return
+
+
+def mark_checkin(tg_user, activity: str | None = None) -> bool:
     """Add user to today's tab. Returns True if first time today, False if already marked."""
     spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
     ws = _daily_ws(spreadsheet, date_str)
+    _ensure_daily_header(ws)
 
     records = ws.get_all_records()
     for rec in records:
@@ -115,6 +137,7 @@ def mark_photo(tg_user) -> bool:
     ws.append_row([
         tg_user.id,
         tg_user.full_name,
+        activity or "",
         "✅",
         datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M"),
     ])
@@ -246,8 +269,17 @@ async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     user = update.effective_user
+
+    pending = (context.application.bot_data.get("pending_checkins") or {}).get(str(user.id))
+    now_ts = datetime.now(pytz.timezone(TIMEZONE)).timestamp()
+    activity = "Photo"
+    if pending and pending.get("chat_id") == msg.chat_id and pending.get("expires_at", 0) >= now_ts:
+        activity = pending.get("activity") or activity
+        # consume pending check-in once a photo arrives
+        context.application.bot_data["pending_checkins"].pop(str(user.id), None)
+
     try:
-        is_new = mark_photo(user)
+        is_new = mark_checkin(user, activity=activity)
     except Exception as e:
         logger.error("Failed to mark photo in sheet: %s", e)
         await msg.reply_text(
@@ -262,7 +294,7 @@ async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             count = 0
         await msg.reply_text(
-            f"✅ *{user.first_name}*, workout logged! Great job 🔥\n"
+            f"✅ *{user.first_name}*, workout logged: *{activity}* 🔥\n"
             f"_{count} participant(s) done so far today._",
             parse_mode="Markdown",
         )
@@ -293,19 +325,80 @@ async def daily_reminder(app: Application):
 
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%A, %B %d")
     try:
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("🏃 Running", callback_data="checkin_Running"),
+                    InlineKeyboardButton("🚴 Cycling", callback_data="checkin_Cycling"),
+                ],
+                [
+                    InlineKeyboardButton("🏊 Swimming", callback_data="checkin_Swimming"),
+                    InlineKeyboardButton("💪 Gym", callback_data="checkin_Gym"),
+                ],
+                [
+                    InlineKeyboardButton("🧘 Yoga", callback_data="checkin_Yoga"),
+                    InlineKeyboardButton("⭐ Other", callback_data="checkin_Other"),
+                ],
+            ]
+        )
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=(
                 f"🌅 *Good morning, Champions!*\n\n"
                 f"📅 {date_str}\n\n"
-                f"💪 Time to move! Post a photo of your workout here and I'll mark you as done for today.\n\n"
+                f"💪 Нажмите кнопку с активностью, затем отправьте фото/скрин тренировки — я отмечу вас на сегодня.\n\n"
                 f"Every rep counts. Let's go! 🚀"
             ),
             parse_mode="Markdown",
+            reply_markup=keyboard,
         )
         logger.info("Daily reminder sent to group %s", GROUP_CHAT_ID)
     except Exception as e:
         logger.error("Failed to send daily reminder: %s", e)
+
+async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button check-ins in the configured group."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    msg = query.message
+    if not msg:
+        return
+
+    if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
+        return
+
+    data = query.data or ""
+    if not data.startswith("checkin_"):
+        return
+
+    activity = data.replace("checkin_", "", 1)
+    user = query.from_user
+
+    bot_data = context.application.bot_data
+    pending = bot_data.get("pending_checkins")
+    if not isinstance(pending, dict):
+        pending = {}
+        bot_data["pending_checkins"] = pending
+
+    now = datetime.now(pytz.timezone(TIMEZONE))
+    pending[str(user.id)] = {
+        "activity": activity,
+        "chat_id": msg.chat_id,
+        "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
+    }
+
+    await query.answer("Ок! Теперь отправьте фото/скрин тренировки.", show_alert=False)
+    try:
+        await msg.reply_text(
+            f"📸 *{user.first_name}*, выбрано: *{activity}*.\n"
+            f"Теперь отправьте фото/скрин тренировки одним сообщением (в течение 10 минут).",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -327,6 +420,7 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^checkin_"))
     app.add_handler(
         MessageHandler(
             filters.PHOTO & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
