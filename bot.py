@@ -57,13 +57,17 @@ logger = logging.getLogger(__name__)
 
 # Avoid leaking BOT_TOKEN via noisy HTTP client logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
-# Redact tokens in our logs
-for _h in logging.getLogger().handlers:
+# Redact tokens in our logs (apply to root + existing handlers)
+_root = logging.getLogger()
+_root.addFilter(_RedactTokenFilter())
+for _h in _root.handlers:
     _h.addFilter(_RedactTokenFilter())
 
 # Bump this string when debugging deployments.
-APP_VERSION = "2026-04-14-ptb21-reply-fix-ru-only"
+APP_VERSION = "2026-04-14-log-redaction-v2"
 
 # ── Environment variables ─────────────────────────────────────────────────────
 BOT_TOKEN            = os.environ["BOT_TOKEN"]
