@@ -333,8 +333,15 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
     else:
-        # No pending prompt: still allow logging from any image, but activity is generic
-        activity = "Photo" if image_kind == "photo" else "Screenshot"
+        # No pending prompt: still require a caption on the image message
+        caption = (msg.caption or "").strip()
+        if not caption:
+            await msg.reply_text(
+                "⚠️ Чтобы засчитать тренировку, отправь фото/скрин *с подписью* одним сообщением.",
+                parse_mode="Markdown",
+            )
+            return
+        activity = caption
 
     try:
         is_new = mark_checkin(user, activity=activity)
