@@ -12,7 +12,14 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -482,7 +489,23 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    async def post_init(app: Application):
+        # Register commands so Telegram shows them in UI for DMs and groups
+        private_cmds = [
+            BotCommand("start", "Начать регистрацию"),
+            BotCommand("cancel", "Отменить регистрацию"),
+        ]
+        group_cmds = [
+            BotCommand("checkin", "✅ Отметить тренировку"),
+            BotCommand("stats", "📊 Сколько отметилось сегодня"),
+        ]
+        try:
+            await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+            await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+        except Exception as e:
+            logger.warning("Failed to set bot commands: %s", e)
+
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     # Registration conversation
     conv = ConversationHandler(
