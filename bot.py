@@ -598,7 +598,10 @@ def main():
     logger.info("Scheduler started — daily reminder at %s %s", NOTIFY_TIME, TIMEZONE)
 
     logger.info("Bot is running…")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False,
+    )
 
 
 if __name__ == "__main__":
