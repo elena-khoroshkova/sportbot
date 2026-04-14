@@ -1,331 +1,346 @@
-import os
-import re
-import json
+"""
+Workout Check-in Bot
+- Кнопка в группе → всплывающее уведомление только для пользователя
+- Фото с подписью остаётся в чате (видят все)
+- Все системные сообщения бота удаляются
+"""
+
 import logging
 from datetime import datetime
 
-import pytz
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+import asyncio
+import random
+
+PHRASES = [
+    "Ты большой молодец, так держать! 🌟",
+    "Очень рада за тебя, продолжай в том же духе! 😊",
+    "Каждая тренировка делает тебя чуточку лучше 💛",
+    "Ты справился — это главное! 🙌",
+    "Гордимся тобой! Так и держи 🫶",
+    "Отлично поработал сегодня! ✨",
+    "Твои усилия не проходят даром 💪",
+    "Здорово! Ты вдохновляешь остальных 🌈",
+    "Вот это да! Умничка 🎉",
+    "Сегодня ты сделал важный шаг к своей цели 🎯",
+    "Всё получается, продолжай! 🌱",
+    "Ты заботишься о себе — это прекрасно 💚",
+    "Движение — это жизнь, и ты это понимаешь! 🌿",
+    "Так приятно видеть твою активность! 😍",
+    "Тело говорит тебе спасибо 🙏",
+    "Отличная работа, не останавливайся! 🚀",
+    "Ты молодец что нашёл время на себя 💙",
+    "День засчитан! Ты великолепен 🏅",
+    "Маленький шаг каждый день — большой результат! 📈",
+    "Ты делаешь это — и это восхитительно! ⭐",
+    "Приятно видеть тебя в деле! 👏",
+    "Твоя настойчивость вдохновляет! 🌸",
+    "Здорово что ты не сдаёшься! 💫",
+    "Умница, так и держи! 🤍",
+    "Ты заслуживаешь всех похвал сегодня! 🥰",
+    "Ещё один день — ещё одна победа! 🏆",
+    "Отлично! Ты на правильном пути 🛤️",
+    "Мы болеем за тебя каждый день! 💕",
+    "Вот это самодисциплина! Восхищаемся 🌻",
+    "Ты делаешь мир лучше — начиная с себя 🌍",
+    "Сегодня ты выбрал себя — это важно! 💛",
+    "Так держать! Ты на верном пути 🌟",
+    "Каждая тренировка — подарок себе 🎁",
+    "Хорошая работа! Мы тобой гордимся 🫂",
+    "Ты умеешь находить время на главное! ⏰💚",
+    "Бодрость духа и тела — твоя суперсила! ✨",
+    "Отличный пример для всех нас! 🌠",
+    "Замечательно! Продолжай радовать нас! 😄",
+    "Ты доказываешь, что всё возможно! 💪🌈",
+    "Здорово! Твоё тело скажет спасибо завтра 🌅",
+    "Молодец что не пропустил! 🎊",
+    "Это твоя маленькая победа сегодня 🥇",
+    "Ты заряжаешь нас своим примером! ⚡",
+    "Прекрасный результат! Так и держи 🌺",
+    "Спасибо что не сдаёшься! 🤗",
+    "Каждый день ты становишься лучше 📊",
+    "Ты вложил время в себя — это бесценно 💎",
+    "Браво! Отличная активность 👌",
+    "Ты делаешь это и мы это замечаем! 👀💛",
+    "Замечательно! День прожит с пользой 🌞",
+]
+
+last_phrase = None
+
 import gspread
 from google.oauth2.service_account import Credentials
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    filters,
-    ContextTypes,
-)
+# ─── НАСТРОЙКИ ───────────────────────────────────────────────
+BOT_TOKEN = "8760645112:AAH1VKqfmOf9pEWhhMsaG5DWUMErTwNYIyQ"
+SPREADSHEET_ID = "1JQkN_ZbSaO3-J4WtWGkNGaZkOsBcHwNcqKoFMIhJKQI"
+CREDENTIALS_FILE = "/Users/xoroshok/Downloads/credentials.json"
 
-# ── Logging ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+ADMIN_IDS = [307404504]
+# ─────────────────────────────────────────────────────────────
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Environment variables ─────────────────────────────────────────────────────
-BOT_TOKEN            = os.environ["BOT_TOKEN"]
-GOOGLE_SHEET_ID      = os.environ["GOOGLE_SHEET_ID"]
-GOOGLE_CREDENTIALS   = os.environ["GOOGLE_CREDENTIALS_JSON"]   # full JSON string
-GROUP_CHAT_ID        = os.environ.get("GROUP_CHAT_ID", "")      # e.g. -1001234567890
-GROUP_INVITE_LINK    = os.environ.get("GROUP_INVITE_LINK", "")  # e.g. https://t.me/+xxxx
-NOTIFY_TIME          = os.environ.get("DAILY_NOTIFY_TIME", "09:00")  # HH:MM local
-TIMEZONE             = os.environ.get("TIMEZONE", "UTC")            # e.g. Europe/Kyiv
 
-# ── Conversation states ───────────────────────────────────────────────────────
-SPORT, LEVEL, EMAIL = range(3)
-
-# ── Google Sheets helpers ─────────────────────────────────────────────────────
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-def _sheet_client():
-    creds = Credentials.from_service_account_info(
-        json.loads(GOOGLE_CREDENTIALS), scopes=SCOPES
-    )
-    return gspread.authorize(creds)
+class CheckinStates(StatesGroup):
+    waiting_for_photo_with_caption = State()
 
 
-def _participants_ws(spreadsheet):
+def get_sheet():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
     try:
-        return spreadsheet.worksheet("Participants")
+        sheet = spreadsheet.worksheet("Чекины")
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet("Participants", rows=1000, cols=60)
-        ws.append_row(["Telegram ID", "Full Name", "Username",
-                       "Sport", "Level", "Corporate Email", "Registered At"])
-        return ws
+        sheet = spreadsheet.add_worksheet(title="Чекины", rows=10000, cols=10)
+        sheet.append_row(["Дата", "Время", "Имя", "Username", "Telegram ID", "Описание", "Фото (file_id)"])
+        sheet.format("A1:G1", {
+            "textFormat": {"bold": True},
+            "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 0.9}
+        })
+    return sheet
 
 
-def _daily_ws(spreadsheet, date_str: str):
-    """Return (or create) a per-day worksheet named like '2026-04-06'."""
-    try:
-        return spreadsheet.worksheet(date_str)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(date_str, rows=500, cols=4)
-        ws.append_row(["Telegram ID", "Full Name", "Photo ✅", "Time"])
-        return ws
-
-
-def save_participant(user_data: dict, tg_user) -> None:
-    spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-    ws = _participants_ws(spreadsheet)
-
+def save_checkin(user: types.User, description: str, photo_file_id: str):
+    sheet = get_sheet()
+    now = datetime.now()
     row = [
-        tg_user.id,
-        tg_user.full_name,
-        tg_user.username or "",
-        user_data["sport"],
-        user_data["level"],
-        user_data["email"],
-        datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M"),
+        now.strftime("%d.%m.%Y"),
+        now.strftime("%H:%M"),
+        user.full_name,
+        f"@{user.username}" if user.username else "—",
+        str(user.id),
+        description,
+        photo_file_id,
     ]
-
-    # Update if already registered, otherwise append
-    records = ws.get_all_records()
-    for idx, rec in enumerate(records, start=2):        # row 1 = header
-        if str(rec.get("Telegram ID")) == str(tg_user.id):
-            ws.update(f"A{idx}:G{idx}", [row])
-            return
-    ws.append_row(row)
+    sheet.append_row(row)
 
 
-def mark_photo(tg_user) -> bool:
-    """Add user to today's tab. Returns True if first time today, False if already marked."""
-    spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-    ws = _daily_ws(spreadsheet, date_str)
+def get_stats_text() -> str:
+    sheet = get_sheet()
+    records = sheet.get_all_records()
 
-    records = ws.get_all_records()
-    for rec in records:
-        if str(rec.get("Telegram ID")) == str(tg_user.id):
-            return False   # already logged today
+    if not records:
+        return "Пока нет ни одного чекина."
 
-    ws.append_row([
-        tg_user.id,
-        tg_user.full_name,
-        "✅",
-        datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M"),
-    ])
-    return True
+    total = len(records)
+    by_user: dict[str, int] = {}
+    for r in records:
+        name = r.get("Имя", "Неизвестно")
+        by_user[name] = by_user.get(name, 0) + 1
+
+    top = sorted(by_user.items(), key=lambda x: x[1], reverse=True)
+    lines = [f"📊 *Статистика тренировок*\n", f"Всего чекинов: *{total}*\n", "*Топ сотрудников:*"]
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (name, count) in enumerate(top[:20]):
+        medal = medals[i] if i < 3 else f"{i+1}."
+        lines.append(f"{medal} {name} — {count} тр.")
+    return "\n".join(lines)
 
 
-def today_count() -> int:
-    """Return how many people logged a photo today."""
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+
+async def try_delete(chat_id: int, message_id: int):
     try:
-        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-        ws = _daily_ws(spreadsheet, date_str)
-        return max(0, len(ws.get_all_records()))
+        await bot.delete_message(chat_id, message_id)
     except Exception:
-        return 0
+        pass
 
 
-# ── Bot handlers ──────────────────────────────────────────────────────────────
+# ─── КНОПКА ДЛЯ ЗАКРЕПЛЕНИЯ ──────────────────────────────────
+@dp.message(Command("pin"))
+async def cmd_pin(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отметить тренировку", callback_data="start_checkin")]
+    ])
+    await message.answer("💪 Нажми кнопку чтобы отметить тренировку:", reply_markup=keyboard)
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("🏃 Running",  callback_data="sport_Running"),
-            InlineKeyboardButton("🚴 Cycling",  callback_data="sport_Cycling"),
-        ],
-        [
-            InlineKeyboardButton("🏊 Swimming", callback_data="sport_Swimming"),
-            InlineKeyboardButton("💪 Gym",       callback_data="sport_Gym"),
-        ],
-        [
-            InlineKeyboardButton("🧘 Yoga",     callback_data="sport_Yoga"),
-            InlineKeyboardButton("⭐ Other",     callback_data="sport_Other"),
-        ],
-    ]
-    await update.message.reply_text(
-        "👋 *Welcome to the Sports Challenge!*\n\n"
-        "I'll register you in just 3 quick steps.\n\n"
-        "First — what sport will you be doing?",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+
+# ─── НАЖАТИЕ КНОПКИ ──────────────────────────────────────────
+@dp.callback_query(lambda c: c.data == "start_checkin")
+async def callback_checkin(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()  # убираем часики
+
+    # Отправляем инструкцию в чат — удалим сразу после получения фото
+    sent = await callback.message.answer(
+        f"📸 {callback.from_user.first_name}, отправьте фото/скриншот с подписью — какую активность выбрали сегодня!"
     )
-    return SPORT
-
-
-async def sport_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    sport = query.data.replace("sport_", "")
-    context.user_data["sport"] = sport
-
-    keyboard = [
-        [InlineKeyboardButton("🌱 Newbie",   callback_data="level_Newbie")],
-        [InlineKeyboardButton("🔥 Regular",  callback_data="level_Regular")],
-        [InlineKeyboardButton("⚡ Pro",       callback_data="level_Pro")],
-    ]
-    await query.edit_message_text(
-        f"Great choice — *{sport}* it is! 🎯\n\n"
-        "Now, how would you describe your fitness level?",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    await state.set_state(CheckinStates.waiting_for_photo_with_caption)
+    await state.update_data(
+        chat_id=sent.chat.id,
+        bot_message_ids=[sent.message_id],
+        checkin_cmd_id=None,
+        user_id=callback.from_user.id
     )
-    return LEVEL
+
+    # Таймаут 2 минуты — если нет фото, удаляем сообщение и сбрасываем
+    async def timeout_cleanup():
+        await asyncio.sleep(120)
+        current = await state.get_state()
+        if current == CheckinStates.waiting_for_photo_with_caption.state:
+            data = await state.get_data()
+            if data.get("user_id") == callback.from_user.id:
+                for msg_id in data.get("bot_message_ids", []):
+                    await try_delete(data["chat_id"], msg_id)
+                await state.clear()
+
+    asyncio.create_task(timeout_cleanup())
 
 
-async def level_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    level = query.data.replace("level_", "")
-    context.user_data["level"] = level
-
-    await query.edit_message_text(
-        f"Level *{level}* — respect! 💪\n\n"
-        "Last step: please send your *corporate email address*.",
-        parse_mode="Markdown",
+# ─── /checkin КОМАНДОЙ ───────────────────────────────────────
+@dp.message(Command("checkin"))
+async def cmd_checkin(message: types.Message, state: FSMContext):
+    await state.set_state(CheckinStates.waiting_for_photo_with_caption)
+    await state.update_data(
+        chat_id=message.chat.id,
+        bot_message_ids=[],
+        checkin_cmd_id=message.message_id,
+        user_id=message.from_user.id
     )
-    return EMAIL
+    # Удаляем команду /checkin сразу
+    await try_delete(message.chat.id, message.message_id)
+    # Показываем попап только этому пользователю — невозможно через message, поэтому тихо ждём фото
 
 
-async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    email = update.message.text.strip()
+# ─── ПОЛУЧИЛИ ФОТО ───────────────────────────────────────────
+@dp.message(CheckinStates.waiting_for_photo_with_caption, F.photo)
+async def process_photo_with_caption(message: types.Message, state: FSMContext):
+    data = await state.get_data()
 
-    if not re.match(r"^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$", email):
-        await update.message.reply_text(
-            "⚠️ That doesn't look like a valid email address.\n"
-            "Please try again (e.g. name@company.com):"
+    # Игнорируем фото от других пользователей
+    if data.get("user_id") and message.from_user.id != data["user_id"]:
+        return
+
+    if not message.caption or not message.caption.strip():
+        # Показываем ошибку только отправителю через reply который удалим
+        sent = await message.reply(
+            "⚠️ Нет подписи! Отправь ещё раз — фото и подпись вместе."
         )
-        return EMAIL
+        # Удаляем оба через 5 секунд
+        async def cleanup():
+            await asyncio.sleep(5)
+            await try_delete(message.chat.id, sent.message_id)
+            await try_delete(message.chat.id, message.message_id)
+        asyncio.create_task(cleanup())
+        return
 
-    context.user_data["email"] = email
+    photo = message.photo[-1]
+    description = message.caption.strip()
 
+    # Удаляем все системные сообщения бота
+    for msg_id in data.get("bot_message_ids", []):
+        await try_delete(data["chat_id"], msg_id)
+
+    await state.clear()
+
+    # Показываем "Молодчина!" только через всплывающее — но это callback_query
+    # Поэтому просто записываем тихо, фото остаётся в чате
+    asyncio.create_task(_save_and_notify(message, description, photo.file_id))
+
+
+async def _save_and_notify(message: types.Message, description: str, photo_file_id: str):
     try:
-        save_participant(context.user_data, update.effective_user)
-        saved_ok = True
+        save_checkin(message.from_user, description, photo_file_id)
     except Exception as e:
-        logger.error("Sheet save error: %s", e)
-        saved_ok = False
+        logger.error(f"Ошибка записи в Sheets: {e}")
 
-    link = GROUP_INVITE_LINK or "_(ask your admin for the group link)_"
-    status_line = "✅ You're in the spreadsheet!" if saved_ok else "⚠️ Registration saved locally — sheet sync failed, please contact admin."
-
-    await update.message.reply_text(
-        f"🎉 *You're registered!*\n\n"
-        f"🏅 Sport: *{context.user_data['sport']}*\n"
-        f"📊 Level: *{context.user_data['level']}*\n"
-        f"📧 Email: `{email}`\n\n"
-        f"{status_line}\n\n"
-        f"👇 Join the challenge group:\n{link}\n\n"
-        f"Every day there will be a reminder in the group — just post a photo of your workout and I'll log it automatically. Let's go! 🚀",
-        parse_mode="Markdown",
-    )
-    return ConversationHandler.END
-
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Registration cancelled. Send /start whenever you're ready.")
-    return ConversationHandler.END
-
-
-async def handle_group_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when someone posts a photo in the group chat."""
-    msg = update.message
-    if not msg or not msg.photo:
-        return
-
-    # Ignore if not in the configured group
-    if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
-        return
-
-    user = update.effective_user
-    is_new = mark_photo(user)
-
-    if is_new:
-        count = today_count()
-        await msg.reply_text(
-            f"✅ *{user.first_name}*, workout logged! Great job 🔥\n"
-            f"_{count} participant(s) done so far today._",
-            parse_mode="Markdown",
-        )
-    else:
-        await msg.reply_text(
-            f"👏 *{user.first_name}*, you already logged one today — keep the momentum!",
-            parse_mode="Markdown",
-        )
-
-
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command: show how many people posted today."""
-    count = today_count()
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%B %d, %Y")
-    await update.message.reply_text(
-        f"📊 *Stats for {date_str}*\n\n"
-        f"✅ Workouts logged today: *{count}*",
-        parse_mode="Markdown",
-    )
-
-
-# ── Scheduler job ─────────────────────────────────────────────────────────────
-
-async def daily_reminder(app: Application):
-    if not GROUP_CHAT_ID:
-        logger.warning("GROUP_CHAT_ID not set — skipping daily reminder.")
-        return
-
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%A, %B %d")
+    # Отвечаем рандомной фразой (не повторяя предыдущую)
+    global last_phrase
+    available = [p for p in PHRASES if p != last_phrase]
+    phrase = random.choice(available)
+    last_phrase = phrase
     try:
-        await app.bot.send_message(
-            chat_id=GROUP_CHAT_ID,
-            text=(
-                f"🌅 *Good morning, Champions!*\n\n"
-                f"📅 {date_str}\n\n"
-                f"💪 Time to move! Post a photo of your workout here and I'll mark you as done for today.\n\n"
-                f"Every rep counts. Let's go! 🚀"
-            ),
-            parse_mode="Markdown",
-        )
-        logger.info("Daily reminder sent to group %s", GROUP_CHAT_ID)
+        await message.reply(phrase, message_effect_id="5104841245755180586")
+    except Exception:
+        await message.reply(phrase)
+
+
+# ─── ИГНОРИРУЕМ ОСТАЛЬНЫЕ СООБЩЕНИЯ В СОСТОЯНИИ ─────────────
+@dp.message(CheckinStates.waiting_for_photo_with_caption)
+async def process_wrong_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+
+    # Игнорируем сообщения от других пользователей
+    if data.get("user_id") and message.from_user.id != data["user_id"]:
+        return
+
+    # Показываем подсказку и удаляем через 5 секунд
+    sent = await message.reply("📸 Нужно отправить фото с подписью — одним сообщением.")
+    async def cleanup():
+        await asyncio.sleep(5)
+        await try_delete(message.chat.id, sent.message_id)
+        await try_delete(message.chat.id, message.message_id)
+    asyncio.create_task(cleanup())
+
+
+# ─── СТАТИСТИКА ──────────────────────────────────────────────
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ Только для администраторов.")
+        return
+    try:
+        text = get_stats_text()
+        await message.answer(text, parse_mode="Markdown")
     except Exception as e:
-        logger.error("Failed to send daily reminder: %s", e)
+        logger.error(f"Ошибка статистики: {e}")
+        await message.answer("❌ Не удалось загрузить статистику.")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+@dp.message(Command("mystats"))
+async def cmd_mystats(message: types.Message):
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_records()
+        user_id = str(message.from_user.id)
+        my_records = [r for r in records if str(r.get("Telegram ID")) == user_id]
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+        if not my_records:
+            await message.answer("У тебя пока нет записанных тренировок. Начни с /checkin 💪")
+            return
 
-    # Registration conversation
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", cmd_start)],
-        states={
-            SPORT: [CallbackQueryHandler(sport_chosen, pattern="^sport_")],
-            LEVEL: [CallbackQueryHandler(level_chosen, pattern="^level_")],
-            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, email_received)],
-        },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
-        allow_reentry=True,
-    )
+        count = len(my_records)
+        last = my_records[-1]
+        await message.answer(
+            f"📈 *Твоя статистика*\n\nВсего тренировок: *{count}*\nПоследняя: {last.get('Дата', '?')}\n_{last.get('Описание', '?')}_",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка mystats: {e}")
+        await message.answer("❌ Не удалось загрузить данные.")
 
-    app.add_handler(conv)
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.GROUPS, handle_group_photo))
 
-    # Daily scheduler
-    tz = pytz.timezone(TIMEZONE)
-    hour, minute = map(int, NOTIFY_TIME.split(":"))
-    scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(
-        daily_reminder,
-        trigger="cron",
-        hour=hour,
-        minute=minute,
-        args=[app],
-    )
-    scheduler.start()
-    logger.info("Scheduler started — daily reminder at %s %s", NOTIFY_TIME, TIMEZONE)
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    sent = await message.answer(f"Привет, {message.from_user.first_name}! 💪\nНажми кнопку чтобы отметить тренировку.")
+    async def cleanup():
+        await asyncio.sleep(10)
+        await try_delete(message.chat.id, sent.message_id)
+        await try_delete(message.chat.id, message.message_id)
+    asyncio.create_task(cleanup())
 
-    logger.info("Bot is running…")
-    app.run_polling(drop_pending_updates=True)
+
+async def main():
+    logger.info("Бот запущен!")
+    await bot.set_my_commands([
+        types.BotCommand(command="checkin", description="✅ Отметить тренировку"),
+        types.BotCommand(command="mystats", description="📈 Моя статистика"),
+    ])
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
