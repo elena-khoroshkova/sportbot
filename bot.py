@@ -422,15 +422,13 @@ async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
         f"<b>подпись</b> — чем ты занимался(ась) сегодня."
     )
     try:
-        prompt = await message.reply_text(
-            prompt_text,
-            parse_mode="HTML",
-            allow_sending_without_reply=True,
-        )
+        # PTB v21 uses reply_parameters under the hood; avoid allow_sending_without_reply here.
+        prompt = await message.reply_text(prompt_text, parse_mode="HTML")
     except Exception:
-        prompt = await message.reply_text(
-            "Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
-            allow_sending_without_reply=True,
+        # Fallback: send as a normal message if replying fails for any reason
+        prompt = await bot.send_message(
+            chat_id=message.chat_id,
+            text="Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
         )
 
     pending[str(user.id)] = {
