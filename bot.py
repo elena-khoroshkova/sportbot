@@ -139,26 +139,53 @@ def _ensure_daily_header(ws) -> None:
         return
 
 
-def mark_checkin(tg_user, activity: str | None = None) -> bool:
-    """Add user to today's tab. Returns True if first time today, False if already marked."""
+def _find_daily_row_index(ws, tg_user_id: str) -> int | None:
+    """Return 1-based row index (>=2) for tg_user_id in column A, else None."""
+    try:
+        # Column A contains Telegram ID; row 1 is header
+        col = ws.col_values(1)
+        for i, v in enumerate(col[1:], start=2):
+            if str(v).strip() == tg_user_id:
+                return i
+        return None
+    except Exception:
+        return None
+
+
+def upsert_checkin(tg_user, activity: str) -> str:
+    """
+    Upsert today's check-in row.
+
+    Returns:
+      - "new": created a new row
+      - "updated": updated existing row's activity/time
+      - "exists": already present and no update needed
+    """
     spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
     ws = _daily_ws(spreadsheet, date_str)
     _ensure_daily_header(ws)
 
-    records = ws.get_all_records()
-    for rec in records:
-        if str(rec.get("Telegram ID")) == str(tg_user.id):
-            return False   # already logged today
+    tg_id = str(tg_user.id)
+    now_time = datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M")
 
-    ws.append_row([
-        tg_user.id,
-        tg_user.full_name,
-        activity or "",
-        "✅",
-        datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M"),
-    ])
-    return True
+    row_idx = _find_daily_row_index(ws, tg_id)
+    if row_idx is None:
+        ws.append_row([tg_user.id, tg_user.full_name, activity, "✅", now_time])
+        return "new"
+
+    # Existing row: update activity/time (and keep Done ✅)
+    try:
+        current_activity = (ws.cell(row_idx, 3).value or "").strip()
+    except Exception:
+        current_activity = ""
+
+    activity_clean = (activity or "").strip()
+    if activity_clean and activity_clean != current_activity:
+        ws.update(f"C{row_idx}:E{row_idx}", [[activity_clean, "✅", now_time]])
+        return "updated"
+
+    return "exists"
 
 
 def today_count() -> int:
@@ -190,9 +217,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
     ]
     await update.message.reply_text(
-        "👋 *Welcome to the Sports Challenge!*\n\n"
-        "I'll register you in just 3 quick steps.\n\n"
-        "First — what sport will you be doing?",
+        "👋 *Добро пожаловать в Sports Challenge!*\n\n"
+        "Регистрация займёт всего 3 шага.\n\n"
+        "Шаг 1 — выбери вид спорта:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -212,8 +239,8 @@ async def sport_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚡ Pro",       callback_data="level_Pro")],
     ]
     await query.edit_message_text(
-        f"Great choice — *{sport}* it is! 🎯\n\n"
-        "Now, how would you describe your fitness level?",
+        f"Отлично — *{sport}* 🎯\n\n"
+        "Шаг 2 — выбери уровень:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -228,8 +255,8 @@ async def level_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["level"] = level
 
     await query.edit_message_text(
-        f"Level *{level}* — respect! 💪\n\n"
-        "Last step: please send your *corporate email address*.",
+        f"Уровень *{level}* — принято 💪\n\n"
+        "Шаг 3 — отправь *корпоративный email*.",
         parse_mode="Markdown",
     )
     return EMAIL
@@ -240,8 +267,8 @@ async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not re.match(r"^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$", email):
         await update.message.reply_text(
-            "⚠️ That doesn't look like a valid email address.\n"
-            "Please try again (e.g. name@company.com):"
+            "⚠️ Похоже, это не email.\n"
+            "Попробуй ещё раз (например, name@company.com):"
         )
         return EMAIL
 
@@ -255,23 +282,23 @@ async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved_ok = False
 
     link = GROUP_INVITE_LINK or "_(ask your admin for the group link)_"
-    status_line = "✅ You're in the spreadsheet!" if saved_ok else "⚠️ Registration saved locally — sheet sync failed, please contact admin."
+    status_line = "✅ Записала в таблицу!" if saved_ok else "⚠️ Не получилось записать в таблицу — пожалуйста, напиши администратору."
 
     await update.message.reply_text(
-        f"🎉 *You're registered!*\n\n"
-        f"🏅 Sport: *{context.user_data['sport']}*\n"
-        f"📊 Level: *{context.user_data['level']}*\n"
+        f"🎉 *Ты зарегистрирован(а)!*\n\n"
+        f"🏅 Спорт: *{context.user_data['sport']}*\n"
+        f"📊 Уровень: *{context.user_data['level']}*\n"
         f"📧 Email: `{email}`\n\n"
         f"{status_line}\n\n"
-        f"👇 Join the challenge group:\n{link}\n\n"
-        f"Every day there will be a reminder in the group — just post a photo of your workout and I'll log it automatically. Let's go! 🚀",
+        f"👇 Вступай в группу челленджа:\n{link}\n\n"
+        f"Каждый день будет напоминание в группе. Чтобы отметиться, используй `/checkin` (или кнопку) и ответь фото/скрином *с подписью* одним сообщением. Поехали! 🚀",
         parse_mode="Markdown",
     )
     return ConversationHandler.END
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Registration cancelled. Send /start whenever you're ready.")
+    await update.message.reply_text("Регистрация отменена. Когда будешь готов(а), отправь /start.")
     return ConversationHandler.END
 
 
@@ -322,7 +349,7 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         caption = (msg.caption or "").strip()
         if not caption:
-            await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением), и отправь ещё раз.")
+            await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением) и отправь ещё раз.")
             return
         activity = caption
         # consume pending check-in once a valid reply arrives
@@ -344,7 +371,7 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         activity = caption
 
     try:
-        is_new = mark_checkin(user, activity=activity)
+        status = upsert_checkin(user, activity=activity)
     except Exception as e:
         logger.error("Failed to mark photo in sheet: %s", e)
         await msg.reply_text(
@@ -353,27 +380,29 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    if is_new:
+    if status in {"new", "updated"}:
         try:
             count = today_count()
         except Exception:
             count = 0
         praise = random.choice(PRAISE_PHRASES)
-        await msg.reply_text(f"{praise}\n\nСегодня отметились: {count}")
+        if status == "updated":
+            await msg.reply_text(f"✅ Обновила подпись.\n\n{praise}\n\nСегодня отметились: {count}")
+        else:
+            await msg.reply_text(f"{praise}\n\nСегодня отметились: {count}")
     else:
         await msg.reply_text(
-            f"👏 *{user.first_name}*, you already logged one today — keep the momentum!",
-            parse_mode="Markdown",
+            f"👏 {user.first_name}, ты уже отмечался(ась) сегодня — так держать!",
         )
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command: show how many people posted today."""
     count = today_count()
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%B %d, %Y")
+    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
     await update.message.reply_text(
-        f"📊 *Stats for {date_str}*\n\n"
-        f"✅ Workouts logged today: *{count}*",
+        f"📊 *Статистика за {date_str}*\n\n"
+        f"✅ Отметились сегодня: *{count}*",
         parse_mode="Markdown",
     )
 
@@ -385,7 +414,7 @@ async def daily_reminder(app: Application):
         logger.warning("GROUP_CHAT_ID not set — skipping daily reminder.")
         return
 
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%A, %B %d")
+    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
     try:
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("✅ /checkin", callback_data="checkin")]]
@@ -393,10 +422,10 @@ async def daily_reminder(app: Application):
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=(
-                f"🌅 *Good morning, Champions!*\n\n"
+                f"🌅 *Доброе утро!*\n\n"
                 f"📅 {date_str}\n\n"
-                f"💪 Нажмите кнопку ниже, затем *ответьте на сообщение бота* фото/скрином с подписью — и я отмечу вас на сегодня.\n\n"
-                f"Every rep counts. Let's go! 🚀"
+                f"💪 Нажми кнопку ниже (или напиши `/checkin`), затем *ответь на сообщение бота* фото/скрином с подписью — и я отмечу тебя на сегодня.\n\n"
+                f"Каждый день — маленький шаг к цели. Поехали! 🚀"
             ),
             parse_mode="Markdown",
             reply_markup=keyboard,
