@@ -2,6 +2,7 @@ import os
 import re
 import json
 import logging
+import random
 from datetime import datetime
 
 import pytz
@@ -46,6 +47,14 @@ SPORT, LEVEL, EMAIL = range(3)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 PENDING_CHECKIN_TTL_SECONDS = 10 * 60  # 10 minutes
+
+PRAISE_PHRASES = [
+    "Круто! Так держать 💪",
+    "Отличная работа — горжусь тобой 🔥",
+    "Засчитано! Ты молодец ✅",
+    "Супер! Продолжаем в том же духе 🚀",
+    "Вау, мощно! ✅",
+]
 
 def _sheet_client():
     creds = Credentials(
@@ -276,7 +285,10 @@ def _extract_image_kind(msg) -> str | None:
 
 
 async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when someone posts a workout photo/screenshot in the group chat."""
+    """Fires when someone posts a workout photo/screenshot in the group chat.
+
+    If the user has a pending check-in prompt, the image must be a reply to it and include a caption.
+    """
     msg = update.message
     if not msg:
         return
@@ -291,13 +303,30 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user = update.effective_user
 
-    pending = (context.application.bot_data.get("pending_checkins") or {}).get(str(user.id))
+    pending_all = context.application.bot_data.get("pending_checkins") or {}
+    pending = pending_all.get(str(user.id))
     now_ts = datetime.now(pytz.timezone(TIMEZONE)).timestamp()
-    activity = "Photo" if image_kind == "photo" else "Screenshot"
+
+    # If a pending prompt exists, require reply-to + caption
     if pending and pending.get("chat_id") == msg.chat_id and pending.get("expires_at", 0) >= now_ts:
-        activity = pending.get("activity") or activity
-        # consume pending check-in once a photo arrives
+        prompt_message_id = pending.get("prompt_message_id")
+        if not msg.reply_to_message or msg.reply_to_message.message_id != prompt_message_id:
+            return
+        caption = (msg.caption or "").strip()
+        if not caption:
+            await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением), и отправь ещё раз.")
+            return
+        activity = caption
+        # consume pending check-in once a valid reply arrives
         context.application.bot_data["pending_checkins"].pop(str(user.id), None)
+        # delete the prompt message after successful check-in
+        try:
+            await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_message_id)
+        except Exception:
+            pass
+    else:
+        # No pending prompt: still allow logging from any image, but activity is generic
+        activity = "Photo" if image_kind == "photo" else "Screenshot"
 
     try:
         is_new = mark_checkin(user, activity=activity)
@@ -314,11 +343,8 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             count = today_count()
         except Exception:
             count = 0
-        await msg.reply_text(
-            f"✅ *{user.first_name}*, workout logged: *{activity}* 🔥\n"
-            f"_{count} participant(s) done so far today._",
-            parse_mode="Markdown",
-        )
+        praise = random.choice(PRAISE_PHRASES)
+        await msg.reply_text(f"{praise}\n\nСегодня отметились: {count}")
     else:
         await msg.reply_text(
             f"👏 *{user.first_name}*, you already logged one today — keep the momentum!",
@@ -347,27 +373,14 @@ async def daily_reminder(app: Application):
     date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%A, %B %d")
     try:
         keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("🏃 Running", callback_data="checkin_Running"),
-                    InlineKeyboardButton("🚴 Cycling", callback_data="checkin_Cycling"),
-                ],
-                [
-                    InlineKeyboardButton("🏊 Swimming", callback_data="checkin_Swimming"),
-                    InlineKeyboardButton("💪 Gym", callback_data="checkin_Gym"),
-                ],
-                [
-                    InlineKeyboardButton("🧘 Yoga", callback_data="checkin_Yoga"),
-                    InlineKeyboardButton("⭐ Other", callback_data="checkin_Other"),
-                ],
-            ]
+            [[InlineKeyboardButton("✅ Отметить тренировку", callback_data="start_checkin")]]
         )
         await app.bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=(
                 f"🌅 *Good morning, Champions!*\n\n"
                 f"📅 {date_str}\n\n"
-                f"💪 Нажмите кнопку с активностью, затем отправьте фото/скрин тренировки — я отмечу вас на сегодня.\n\n"
+                f"💪 Нажмите кнопку ниже, затем *ответьте на сообщение бота* фото/скрином с подписью — и я отмечу вас на сегодня.\n\n"
                 f"Every rep counts. Let's go! 🚀"
             ),
             parse_mode="Markdown",
@@ -377,8 +390,13 @@ async def daily_reminder(app: Application):
     except Exception as e:
         logger.error("Failed to send daily reminder: %s", e)
 
+def _user_mention_md(user) -> str:
+    name = (user.full_name or user.first_name or "user").replace("[", "(").replace("]", ")")
+    return f"[{name}](tg://user?id={user.id})"
+
+
 async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button check-ins in the configured group."""
+    """Handle inline button click: ask user to reply with image+caption, then log on reply."""
     query = update.callback_query
     if not query:
         return
@@ -392,10 +410,9 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     data = query.data or ""
-    if not data.startswith("checkin_"):
+    if data != "start_checkin":
         return
 
-    activity = data.replace("checkin_", "", 1)
     user = query.from_user
 
     bot_data = context.application.bot_data
@@ -405,21 +422,20 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
         bot_data["pending_checkins"] = pending
 
     now = datetime.now(pytz.timezone(TIMEZONE))
+    # Send a prompt message that the user must reply to with image + caption
+    prompt = await msg.reply_text(
+        f"{_user_mention_md(user)}, ответь на это сообщение *фото/скрином* и добавь *подпись* — чем ты занимался(ась) сегодня.",
+        parse_mode="Markdown",
+        allow_sending_without_reply=True,
+    )
+
     pending[str(user.id)] = {
-        "activity": activity,
         "chat_id": msg.chat_id,
+        "prompt_message_id": prompt.message_id,
         "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
     }
 
-    await query.answer("Ок! Теперь отправьте фото/скрин тренировки.", show_alert=False)
-    try:
-        await msg.reply_text(
-            f"📸 *{user.first_name}*, выбрано: *{activity}*.\n"
-            f"Теперь отправьте фото/скрин тренировки одним сообщением (в течение 10 минут).",
-            parse_mode="Markdown",
-        )
-    except Exception:
-        pass
+    await query.answer("Ок! Ответь фото/скрином с подписью.", show_alert=False)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -441,7 +457,7 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^checkin_"))
+    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^start_checkin$"))
     app.add_handler(
         MessageHandler(
             (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
