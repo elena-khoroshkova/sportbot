@@ -86,7 +86,7 @@ SPORT, LEVEL, EMAIL = range(3)
 # ── Google Sheets helpers ─────────────────────────────────────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-PENDING_CHECKIN_TTL_SECONDS = 10 * 60  # 10 minutes
+PENDING_CHECKIN_TTL_SECONDS = 2 * 60  # 2 minutes
 
 PRAISE_PHRASES = [
     "Круто! Так держать 💪",
@@ -117,6 +117,17 @@ def _participants_ws(spreadsheet):
         ws.append_row(["Telegram ID", "Full Name", "Username",
                        "Sport", "Level", "Corporate Email", "Registered At"])
         return ws
+
+
+def _checkins_ws(spreadsheet):
+    """Single worksheet for all check-ins."""
+    title = "Чекины"
+    try:
+        ws = spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title, rows=20000, cols=10)
+        ws.append_row(["Дата", "Время", "Имя", "Username", "Telegram ID", "Активность", "Медиа", "File ID"])
+    return ws
 
 
 def _daily_ws(spreadsheet, date_str: str):
@@ -184,40 +195,28 @@ def _find_daily_row_index(ws, tg_user_id: str) -> int | None:
         return None
 
 
-def upsert_checkin(tg_user, activity: str) -> str:
-    """
-    Upsert today's check-in row.
-
-    Returns:
-      - "new": created a new row
-      - "updated": updated existing row's activity/time
-      - "exists": already present and no update needed
-    """
+def append_checkin_to_sheet(
+    tg_user,
+    activity: str,
+    media_kind: str,
+    file_id: str,
+) -> None:
+    """Append a check-in row to the 'Чекины' worksheet."""
     spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-    ws = _daily_ws(spreadsheet, date_str)
-    _ensure_daily_header(ws)
-
-    tg_id = str(tg_user.id)
-    now_time = datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M")
-
-    row_idx = _find_daily_row_index(ws, tg_id)
-    if row_idx is None:
-        ws.append_row([tg_user.id, tg_user.full_name, activity, "✅", now_time])
-        return "new"
-
-    # Existing row: update activity/time (and keep Done ✅)
-    try:
-        current_activity = (ws.cell(row_idx, 3).value or "").strip()
-    except Exception:
-        current_activity = ""
-
-    activity_clean = (activity or "").strip()
-    if activity_clean and activity_clean != current_activity:
-        ws.update(f"C{row_idx}:E{row_idx}", [[activity_clean, "✅", now_time]])
-        return "updated"
-
-    return "exists"
+    ws = _checkins_ws(spreadsheet)
+    now = datetime.now(pytz.timezone(TIMEZONE))
+    ws.append_row(
+        [
+            now.strftime("%d.%m.%Y"),
+            now.strftime("%H:%M"),
+            tg_user.full_name,
+            f"@{tg_user.username}" if getattr(tg_user, "username", None) else "—",
+            str(tg_user.id),
+            (activity or "").strip(),
+            media_kind,
+            file_id,
+        ]
+    )
 
 
 def today_count() -> int:
@@ -231,14 +230,15 @@ def today_count() -> int:
         return 0
 
 def today_stats() -> tuple[int, int]:
-    """Return (unique_users, total_logs) for today."""
+    """Return (unique_users, total_logs) for today from 'Чекины'."""
     try:
         spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-        ws = _daily_ws(spreadsheet, date_str)
+        ws = _checkins_ws(spreadsheet)
         recs = ws.get_all_records()
-        ids = {str(r.get("Telegram ID")).strip() for r in recs if str(r.get("Telegram ID")).strip()}
-        return (len(ids), len(recs))
+        today = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
+        today_recs = [r for r in recs if str(r.get("Дата", "")).strip() == today]
+        ids = {str(r.get("Telegram ID")).strip() for r in today_recs if str(r.get("Telegram ID")).strip()}
+        return (len(ids), len(today_recs))
     except Exception:
         return (0, 0)
 
@@ -374,8 +374,7 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     image_kind = _extract_image_kind(msg)
-    if not image_kind:
-        return
+    # we also handle "reply but not image" below, when pending exists
 
     # Ignore if not in the configured group
     if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
@@ -392,6 +391,9 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         prompt_message_id = pending.get("prompt_message_id")
         if not msg.reply_to_message or msg.reply_to_message.message_id != prompt_message_id:
             return
+        if not image_kind:
+            await msg.reply_text("⚠️ Нужна *фотография/скрин* с подписью (одним сообщением).", parse_mode="Markdown")
+            return
         caption = (msg.caption or "").strip()
         if not caption:
             await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением) и отправь ещё раз.")
@@ -405,6 +407,8 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
     else:
+        if not image_kind:
+            return
         # No pending prompt: still require a caption on the image message
         caption = (msg.caption or "").strip()
         if not caption:
@@ -416,19 +420,13 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         activity = caption
 
     try:
-        # Allow multiple logs per day: always append a new row
-        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-        ws = _daily_ws(spreadsheet, date_str)
-        _ensure_daily_header(ws)
-        ws.append_row([
-            user.id,
-            user.full_name,
-            (activity or "").strip(),
-            "✅",
-            datetime.now(pytz.timezone(TIMEZONE)).strftime("%H:%M"),
-        ])
-        status = "new"
+        if image_kind == "photo":
+            file_id = msg.photo[-1].file_id
+            media_label = "photo"
+        else:
+            file_id = msg.document.file_id
+            media_label = "document"
+        append_checkin_to_sheet(user, activity=activity, media_kind=media_label, file_id=file_id)
     except Exception as e:
         logger.error("Failed to mark photo in sheet: %s", e)
         await msg.reply_text(
@@ -437,20 +435,15 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    if status in {"new", "updated"}:
-        praise = random.choice(PRAISE_PHRASES)
-        unique, _total = today_stats()
-        await msg.reply_text(f"{praise}\n\nСегодня отметились: {unique}")
-    else:
-        praise = random.choice(PRAISE_PHRASES)
-        unique, _total = today_stats()
-        await msg.reply_text(f"{praise}\n\nСегодня отметились: {unique}")
+    praise = random.choice(PRAISE_PHRASES)
+    unique, _total = today_stats()
+    await msg.reply_text(f"{praise}\n\nСегодня отметились: {unique}")
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command: show how many people posted today."""
     unique, total = today_stats()
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
+    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
     await update.message.reply_text(
         f"📊 *Статистика за {date_str}*\n\n✅ Отметились сегодня: *{unique}*\n🧾 Всего записей: *{total}*",
         parse_mode="Markdown",
@@ -464,7 +457,7 @@ async def daily_reminder(app: Application):
         logger.warning("GROUP_CHAT_ID not set — skipping daily reminder.")
         return
 
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
+    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
     try:
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("✅ /checkin", callback_data="checkin")]]
@@ -523,6 +516,23 @@ async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
         "prompt_message_id": prompt.message_id,
         "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
     }
+
+    # Auto-delete prompt after TTL if user doesn't reply in time
+    async def _timeout_cleanup():
+        await asyncio.sleep(PENDING_CHECKIN_TTL_SECONDS)
+        pending_now = bot_data.get("pending_checkins") or {}
+        entry = pending_now.get(str(user.id))
+        if not entry:
+            return
+        if entry.get("prompt_message_id") != prompt.message_id or entry.get("chat_id") != message.chat_id:
+            return
+        try:
+            await bot.delete_message(chat_id=message.chat_id, message_id=prompt.message_id)
+        except Exception:
+            pass
+        pending_now.pop(str(user.id), None)
+
+    asyncio.create_task(_timeout_cleanup())
 
 
 async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
