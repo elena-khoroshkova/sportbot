@@ -462,8 +462,9 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
     if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
         return
 
-    data = query.data or ""
-    if data != "checkin":
+    data = (query.data or "").strip()
+    # Backward-compatible: older pinned messages used "start_checkin"
+    if data not in {"checkin", "start_checkin"}:
         return
 
     user = query.from_user
@@ -498,7 +499,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("checkin", cmd_checkin))
-    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^checkin$"))
+    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^(checkin|start_checkin)$"))
     app.add_handler(
         MessageHandler(
             (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
