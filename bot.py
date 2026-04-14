@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import random
+import html
 from datetime import datetime
 
 import pytz
@@ -395,6 +396,11 @@ def _user_mention_md(user) -> str:
     return f"[{name}](tg://user?id={user.id})"
 
 
+def _user_mention_html(user) -> str:
+    name = html.escape(user.full_name or user.first_name or "user")
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+
 async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button click: ask user to reply with image+caption, then log on reply."""
     query = update.callback_query
@@ -423,11 +429,22 @@ async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TY
 
     now = datetime.now(pytz.timezone(TIMEZONE))
     # Send a prompt message that the user must reply to with image + caption
-    prompt = await msg.reply_text(
-        f"{_user_mention_md(user)}, ответь на это сообщение *фото/скрином* и добавь *подпись* — чем ты занимался(ась) сегодня.",
-        parse_mode="Markdown",
-        allow_sending_without_reply=True,
+    prompt_text = (
+        f"{_user_mention_html(user)}, ответь на это сообщение <b>фото/скрином</b> и добавь "
+        f"<b>подпись</b> — чем ты занимался(ась) сегодня."
     )
+    try:
+        prompt = await msg.reply_text(
+            prompt_text,
+            parse_mode="HTML",
+            allow_sending_without_reply=True,
+        )
+    except Exception:
+        # Fallback: no formatting, no mention
+        prompt = await msg.reply_text(
+            "Ответь на это сообщение фото/скрином и добавь подпись — чем ты занимался(ась) сегодня.",
+            allow_sending_without_reply=True,
+        )
 
     pending[str(user.id)] = {
         "chat_id": msg.chat_id,
