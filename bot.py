@@ -32,11 +32,35 @@ from telegram.ext import (
 )
 
 # ── Logging ──────────────────────────────────────────────────────────────────
+class _RedactTokenFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            token = os.environ.get("BOT_TOKEN", "")
+            if token:
+                record.msg = str(record.msg).replace(token, "<BOT_TOKEN_REDACTED>")
+            # Also redact common Telegram bot token patterns if present in formatted message
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    "<BOT_TOKEN_REDACTED>" if (isinstance(a, str) and re.search(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", a)) else a
+                    for a in record.args
+                )
+        except Exception:
+            pass
+        return True
+
+
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Avoid leaking BOT_TOKEN via noisy HTTP client logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Redact tokens in our logs
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_RedactTokenFilter())
 
 # Bump this string when debugging deployments.
 APP_VERSION = "2026-04-14-ptb21-reply-fix-ru-only"
