@@ -1,35 +1,10 @@
 import os
-import re
-import json
 import logging
 import random
-import html
-import asyncio
-from datetime import datetime
 
-import pytz
-import gspread
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    BotCommand,
-    BotCommandScopeAllGroupChats,
-    BotCommandScopeAllPrivateChats,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    filters,
-    ContextTypes,
-)
+from telegram import Update, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import re
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 class _RedactTokenFilter(logging.Filter):
@@ -67,26 +42,11 @@ for _h in _root.handlers:
     _h.addFilter(_RedactTokenFilter())
 
 # Bump this string when debugging deployments.
-APP_VERSION = "2026-04-14-sheets-trace-v1"
+APP_VERSION = "2026-04-15-praise-only-v1"
 
 # ── Environment variables ─────────────────────────────────────────────────────
-BOT_TOKEN            = os.environ["BOT_TOKEN"]
-GOOGLE_SHEET_ID      = os.environ["GOOGLE_SHEET_ID"]
-GOOGLE_CLIENT_ID     = os.environ["GOOGLE_CLIENT_ID"]
-GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
-GOOGLE_REFRESH_TOKEN = os.environ["GOOGLE_REFRESH_TOKEN"]
-GROUP_CHAT_ID        = os.environ.get("GROUP_CHAT_ID", "")      # e.g. -1001234567890
-GROUP_INVITE_LINK    = os.environ.get("GROUP_INVITE_LINK", "")  # e.g. https://t.me/+xxxx
-NOTIFY_TIME          = os.environ.get("DAILY_NOTIFY_TIME", "09:00")  # HH:MM local
-TIMEZONE             = os.environ.get("TIMEZONE", "UTC")            # e.g. Europe/Kyiv
-
-# ── Conversation states ───────────────────────────────────────────────────────
-SPORT, LEVEL, EMAIL = range(3)
-
-# ── Google Sheets helpers ─────────────────────────────────────────────────────
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-PENDING_CHECKIN_TTL_SECONDS = 2 * 60  # 2 minutes
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")  # optional: restrict to a single group
 
 PRAISE_PHRASES = [
     "Круто! Так держать 💪",
@@ -94,495 +54,196 @@ PRAISE_PHRASES = [
     "Засчитано! Ты молодец ✅",
     "Супер! Продолжаем в том же духе 🚀",
     "Вау, мощно! ✅",
+    "Мощный старт — продолжай!",
+    "Вот это темп!",
+    "Сильно. Очень сильно.",
+    "Отличная тренировка!",
+    "Классная работа сегодня.",
+    "Так держать — стабильность решает.",
+    "Ты красавчик(ца) — зачёт!",
+    "Пушка! Продолжаем.",
+    "Прогресс видно — молодец!",
+    "Супер дисциплина!",
+    "Уважение за регулярность.",
+    "Это было уверенно.",
+    "Топ! Отличный день.",
+    "Здорово! Ещё один шаг к цели.",
+    "Ты на правильном пути.",
+    "Вот это настрой!",
+    "Стабильно и качественно.",
+    "Сильный чек-ин!",
+    "Отличный выбор активности!",
+    "Красиво сделано!",
+    "Ты вдохновляешь.",
+    "Уровень! Так держать.",
+    "Фантастика — продолжай!",
+    "Молодец! Не сбавляй.",
+    "Отличная энергия!",
+    "Класс! Засчитано.",
+    "Супер! Ты в игре.",
+    "Это прям огонь!",
+    "Чётко. По делу.",
+    "Отлично поработал(а)!",
+    "Горжусь твоей дисциплиной.",
+    "Сильно! Так держать.",
+    "Браво! Продолжаем.",
+    "Отличный вклад в себя.",
+    "Ты сегодня молодчина.",
+    "Очень круто!",
+    "Вот это мощь!",
+    "Потрясающе!",
+    "Супер форма!",
+    "Классная работа над собой.",
+    "Уверенный шаг вперёд.",
+    "Плюс в карму здоровья.",
+    "Отлично идёшь!",
+    "Зачётный день!",
+    "Ты сделал(а) это!",
+    "Супер! Респект.",
+    "Красава! Едем дальше.",
+    "Так держать. Ты можешь больше!",
+    "Сильная привычка формируется.",
+    "Шикарно! Продолжай.",
+    "Это было достойно.",
+    "Огонь-огонь!",
+    "Уровень дисциплины — топ.",
+    "Очень хорошо!",
+    "Стабильность — твоё оружие.",
+    "Ты в отличном ритме.",
+    "Это победа над ленью ✅",
+    "Прекрасно отработано.",
+    "Молодец! Ты растёшь.",
+    "Сильный ход!",
+    "Отличный результат.",
+    "Супер, что отметился(ась)!",
+    "Топовый чек-ин ✅",
+    "Круто, что не пропускаешь.",
+    "Прекрасная работа!",
+    "Так и строится форма.",
+    "Уважение. Продолжай!",
+    "Пойдёт в копилку прогресса.",
+    "Отличная привычка.",
+    "Бомбически!",
+    "Очень достойно.",
+    "Потрясающий настрой.",
+    "Красиво и стабильно.",
+    "Хорошая работа, чемпион(ка)!",
+    "Супер! Ты молодец-молодец.",
+    "Сильный день!",
+    "Уверенно закрываешь чек-ин.",
+    "Класс! Продолжай в том же духе.",
+    "Это точно засчитано ✅",
+    "Супер-пупер!",
+    "Ты двигаешься к цели.",
+    "Отличная работа над базой.",
+    "Так держать — шаг за шагом.",
+    "Классная дисциплина ✅",
+    "Круто! Ты реально стараешься.",
+    "Сильная тренировка — респект.",
+    "Вот это упорство!",
+    "Отличный баланс и темп.",
+    "Ты прокачиваешься.",
+    "Уровень мотивации — огонь.",
+    "Так и надо!",
+    "Респект за усилия.",
+    "Ты сделал(а) день!",
+    "Качественно!",
+    "Прям красавчик(ца)!",
+    "Супер! Ещё один чек-ин в копилку.",
+    "Топ. Так держать.",
+    "Это уже серия — продолжай!",
+    "Надёжно. Стабильно.",
+    "Круто видеть твою регулярность.",
+    "Сильная работа — молодец.",
+    "Шаг к лучшей версии себя ✅",
+    "Отлично! Держим ритм.",
+    "Супер! Не останавливайся.",
+    "Это было круто, правда.",
+    "Ты молодец — продолжай жать!",
+    "Восхитительно!",
+    "Очень круто отработал(а).",
+    "Красота! Засчитано ✅",
+    "Ты в топе сегодня.",
+    "Супер. Снимаю шляпу.",
+    "Респект и уважуха.",
+    "Вот это сила воли!",
+    "Кайф! Так держать.",
+    "Чёткий чек-ин ✅",
+    "Отличный вклад в здоровье.",
+    "Мощно! Продолжаем качать.",
+    "Стабильная работа — топ.",
+    "Ты всё ближе к цели.",
+    "Супер! Отличный прогресс.",
+    "Вот так и делается результат.",
+    "Сильно и красиво.",
+    "Отличный темп — держи!",
+    "Ты красавчик(ца), без вопросов.",
+    "Круто! Сегодня ты победил(а) ✅",
+    "Шикарно. Продолжай.",
+    "Отличная тренировка — зачёт!",
+    "Супер. Ещё один кирпичик в форму.",
+    "Уверенная отметка ✅",
+    "Это достойно похвалы!",
+    "Класс! Ты не сдаёшься.",
+    "Молодец! Вижу старание.",
+    "Отличная работа — продолжай.",
+    "Ты реально молодчина.",
+    "Огонь! Отличный день.",
+    "Сильный прогресс. Так держать.",
+    "Очень хорошо — продолжай в том же духе.",
+    "Зачёт. Продолжаем.",
+    "Классная тренировка — супер!",
+    "Ты на волне ✅",
+    "Отличный чек-ин! Молодец.",
+    "Мощь. Дисциплина. Результат.",
+    "Так и надо — уверенно.",
+    "Супер! Ты делаешь себя сильнее.",
+    "Хорош! Отличная работа.",
 ]
 
-def _sheet_client():
-    creds = Credentials(
-        token=None,
-        refresh_token=GOOGLE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
-    )
-    creds.refresh(Request())   # exchange refresh_token → access_token
-    return gspread.authorize(creds)
 
-
-def _participants_ws(spreadsheet):
-    try:
-        return spreadsheet.worksheet("Participants")
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet("Participants", rows=1000, cols=60)
-        ws.append_row(["Telegram ID", "Full Name", "Username",
-                       "Sport", "Level", "Corporate Email", "Registered At"])
-        return ws
-
-
-def _checkins_ws(spreadsheet):
-    """Single worksheet for all check-ins."""
-    title = "Чекины"
-    try:
-        ws = spreadsheet.worksheet(title)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title, rows=20000, cols=10)
-        ws.append_row(["Дата", "Время", "Имя", "Username", "Telegram ID", "Активность", "Медиа", "File ID"])
-    return ws
-
-
-def _daily_ws(spreadsheet, date_str: str):
-    """Return (or create) a per-day worksheet named like '2026-04-06'."""
-    try:
-        return spreadsheet.worksheet(date_str)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(date_str, rows=500, cols=5)
-        ws.append_row(["Telegram ID", "Full Name", "Activity", "Done ✅", "Time"])
-        return ws
-
-
-def save_participant(user_data: dict, tg_user) -> None:
-    spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-    ws = _participants_ws(spreadsheet)
-
-    row = [
-        tg_user.id,
-        tg_user.full_name,
-        tg_user.username or "",
-        user_data["sport"],
-        user_data["level"],
-        user_data["email"],
-        datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M"),
-    ]
-
-    # Update if already registered, otherwise append
-    records = ws.get_all_records()
-    for idx, rec in enumerate(records, start=2):        # row 1 = header
-        if str(rec.get("Telegram ID")) == str(tg_user.id):
-            ws.update(f"A{idx}:G{idx}", [row])
-            return
-    ws.append_row(row)
-
-
-def _ensure_daily_header(ws) -> None:
-    """Best-effort: ensure daily worksheet has expected header columns."""
-    try:
-        header = ws.row_values(1)
-        expected = ["Telegram ID", "Full Name", "Activity", "Done ✅", "Time"]
-        if header == expected:
-            return
-        if not header:
-            ws.update("A1:E1", [expected])
-            return
-        # If old header is present, patch it in place (keeping any extra cols)
-        padded = (header + [""] * 5)[:5]
-        if padded != expected:
-            ws.update("A1:E1", [expected])
-    except Exception:
-        # Don't block check-ins if header update fails
-        return
-
-
-def _find_daily_row_index(ws, tg_user_id: str) -> int | None:
-    """Return 1-based row index (>=2) for tg_user_id in column A, else None."""
-    try:
-        # Column A contains Telegram ID; row 1 is header
-        col = ws.col_values(1)
-        for i, v in enumerate(col[1:], start=2):
-            if str(v).strip() == tg_user_id:
-                return i
-        return None
-    except Exception:
-        return None
-
-
-def append_checkin_to_sheet(
-    tg_user,
-    activity: str,
-    media_kind: str,
-    file_id: str,
-) -> None:
-    """Append a check-in row to the 'Чекины' worksheet."""
-    spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-    ws = _checkins_ws(spreadsheet)
-    now = datetime.now(pytz.timezone(TIMEZONE))
-    ws.append_row(
-        [
-            now.strftime("%d.%m.%Y"),
-            now.strftime("%H:%M"),
-            tg_user.full_name,
-            f"@{tg_user.username}" if getattr(tg_user, "username", None) else "—",
-            str(tg_user.id),
-            (activity or "").strip(),
-            media_kind,
-            file_id,
-        ]
-    )
-
-
-def today_count() -> int:
-    """Return total number of logs today (rows in daily sheet)."""
-    try:
-        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-        date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d")
-        ws = _daily_ws(spreadsheet, date_str)
-        return max(0, len(ws.get_all_records()))
-    except Exception:
-        return 0
-
-def today_stats() -> tuple[int, int]:
-    """Return (unique_users, total_logs) for today from 'Чекины'."""
-    try:
-        spreadsheet = _sheet_client().open_by_key(GOOGLE_SHEET_ID)
-        ws = _checkins_ws(spreadsheet)
-        recs = ws.get_all_records()
-        today = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
-        today_recs = [r for r in recs if str(r.get("Дата", "")).strip() == today]
-        ids = {str(r.get("Telegram ID")).strip() for r in today_recs if str(r.get("Telegram ID")).strip()}
-        return (len(ids), len(today_recs))
-    except Exception:
-        return (0, 0)
-
+def _next_praise(bot_data: dict) -> str:
+    """
+    Return a praise phrase without repeating until all are used.
+    Uses a shuffled "bag" stored in bot_data.
+    """
+    bag = bot_data.get("_praise_bag")
+    if not isinstance(bag, list) or not bag:
+        bag = list(PRAISE_PHRASES)
+        random.shuffle(bag)
+        bot_data["_praise_bag"] = bag
+    return bag.pop()
 
 # ── Bot handlers ──────────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("🏃 Running",  callback_data="sport_Running"),
-            InlineKeyboardButton("🚴 Cycling",  callback_data="sport_Cycling"),
-        ],
-        [
-            InlineKeyboardButton("🏊 Swimming", callback_data="sport_Swimming"),
-            InlineKeyboardButton("💪 Gym",       callback_data="sport_Gym"),
-        ],
-        [
-            InlineKeyboardButton("🧘 Yoga",     callback_data="sport_Yoga"),
-            InlineKeyboardButton("⭐ Other",     callback_data="sport_Other"),
-        ],
-    ]
-    await update.message.reply_text(
-        "👋 *Добро пожаловать в Sports Challenge!*\n\n"
-        "Регистрация займёт всего 3 шага.\n\n"
-        "Шаг 1 — выбери вид спорта:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    text = (
+        "Пришли в группу фото/скрин *с подписью* — я отвечу похвалой.\n"
+        "Если подписи нет — попрошу добавить."
     )
-    return SPORT
-
-
-async def sport_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    sport = query.data.replace("sport_", "")
-    context.user_data["sport"] = sport
-
-    keyboard = [
-        [InlineKeyboardButton("🌱 Newbie",   callback_data="level_Newbie")],
-        [InlineKeyboardButton("🔥 Regular",  callback_data="level_Regular")],
-        [InlineKeyboardButton("⚡ Pro",       callback_data="level_Pro")],
-    ]
-    await query.edit_message_text(
-        f"Отлично — *{sport}* 🎯\n\n"
-        "Шаг 2 — выбери уровень:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return LEVEL
-
-
-async def level_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    level = query.data.replace("level_", "")
-    context.user_data["level"] = level
-
-    await query.edit_message_text(
-        f"Уровень *{level}* — принято 💪\n\n"
-        "Шаг 3 — отправь *корпоративный email*.",
-        parse_mode="Markdown",
-    )
-    return EMAIL
-
-
-async def email_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    email = update.message.text.strip()
-
-    if not re.match(r"^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$", email):
-        await update.message.reply_text(
-            "⚠️ Похоже, это не email.\n"
-            "Попробуй ещё раз (например, name@company.com):"
-        )
-        return EMAIL
-
-    context.user_data["email"] = email
-
-    try:
-        save_participant(context.user_data, update.effective_user)
-        saved_ok = True
-    except Exception as e:
-        logger.error("Sheet save error: %s", e)
-        saved_ok = False
-
-    link = GROUP_INVITE_LINK or "_(ask your admin for the group link)_"
-    status_line = "✅ Записала в таблицу!" if saved_ok else "⚠️ Не получилось записать в таблицу — пожалуйста, напиши администратору."
-
-    await update.message.reply_text(
-        "🎉 *Ты зарегистрирован(а)!*\n\n"
-        f"🏅 Спорт: *{context.user_data['sport']}*\n"
-        f"📊 Уровень: *{context.user_data['level']}*\n"
-        f"📧 Email: `{email}`\n\n"
-        f"{status_line}\n\n"
-        f"👇 Вступай в группу челленджа:\n{link}\n\n"
-        "Каждый день будет напоминание в группе. Чтобы отметиться, используй `/checkin` (или кнопку) "
-        "и ответь фото/скрином *с подписью* одним сообщением. Поехали! 🚀",
-        parse_mode="Markdown",
-    )
-    return ConversationHandler.END
-
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Регистрация отменена. Когда будешь готов(а), отправь /start.")
-    return ConversationHandler.END
-
-
-def _extract_image_kind(msg) -> str | None:
-    """Return 'photo' or 'document' if message contains an image, else None."""
-    if msg.photo:
-        return "photo"
-    doc = msg.document
-    if not doc:
-        return None
-    mime = (doc.mime_type or "").lower()
-    if mime.startswith("image/"):
-        return "document"
-    # Some clients may send without mime_type; fall back to extension
-    name = (doc.file_name or "").lower()
-    if name.endswith((".png", ".jpg", ".jpeg", ".webp")):
-        return "document"
-    return None
+    if update.message:
+        await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when someone posts a workout photo/screenshot in the group chat.
-
-    If the user has a pending check-in prompt, the image must be a reply to it and include a caption.
-    """
     msg = update.message
     if not msg:
         return
-
-    image_kind = _extract_image_kind(msg)
-    # we also handle "reply but not image" below, when pending exists
 
     # Ignore if not in the configured group
     if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
         return
 
-    user = update.effective_user
-
-    pending_all = context.application.bot_data.get("pending_checkins") or {}
-    pending = pending_all.get(str(user.id))
-    now_ts = datetime.now(pytz.timezone(TIMEZONE)).timestamp()
-
-    # If a pending prompt exists, require reply-to + caption
-    if pending and pending.get("chat_id") == msg.chat_id and pending.get("expires_at", 0) >= now_ts:
-        prompt_message_id = pending.get("prompt_message_id")
-        if not msg.reply_to_message or msg.reply_to_message.message_id != prompt_message_id:
-            return
-        if not image_kind:
-            await msg.reply_text("⚠️ Нужна *фотография/скрин* с подписью (одним сообщением).", parse_mode="Markdown")
-            return
-        caption = (msg.caption or "").strip()
-        if not caption:
-            await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением) и отправь ещё раз.")
-            return
-        activity = caption
-        # consume pending check-in once a valid reply arrives
-        context.application.bot_data["pending_checkins"].pop(str(user.id), None)
-        # delete the prompt message after successful check-in
-        try:
-            await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_message_id)
-        except Exception:
-            pass
-    else:
-        if not image_kind:
-            return
-        # No pending prompt: still require a caption on the image message
-        caption = (msg.caption or "").strip()
-        if not caption:
-            await msg.reply_text(
-                "⚠️ Чтобы засчитать тренировку, отправь фото/скрин *с подписью* одним сообщением.",
-                parse_mode="Markdown",
-            )
-            return
-        activity = caption
-
-    try:
-        if image_kind == "photo":
-            file_id = msg.photo[-1].file_id
-            media_label = "photo"
-        else:
-            file_id = msg.document.file_id
-            media_label = "document"
-        append_checkin_to_sheet(user, activity=activity, media_kind=media_label, file_id=file_id)
-    except Exception as e:
-        logger.exception(
-            "Failed to mark photo in sheet (%s): %r",
-            type(e).__name__,
-            e,
-        )
-        await msg.reply_text(
-            "⚠️ Не получилось записать отметку в Google Sheets. "
-            "Проверь `GOOGLE_*` и доступ к таблице, затем попробуй ещё раз."
-        )
+    has_image = bool(msg.photo) or (msg.document and (msg.document.mime_type or "").lower().startswith("image/"))
+    if not has_image:
         return
 
-    praise = random.choice(PRAISE_PHRASES)
-    unique, _total = today_stats()
-    await msg.reply_text(f"{praise}\n\nСегодня отметились: {unique}")
-
-
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command: show how many people posted today."""
-    unique, total = today_stats()
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
-    await update.message.reply_text(
-        f"📊 *Статистика за {date_str}*\n\n✅ Отметились сегодня: *{unique}*\n🧾 Всего записей: *{total}*",
-        parse_mode="Markdown",
-    )
-
-
-# ── Scheduler job ─────────────────────────────────────────────────────────────
-
-async def daily_reminder(app: Application):
-    if not GROUP_CHAT_ID:
-        logger.warning("GROUP_CHAT_ID not set — skipping daily reminder.")
+    caption = (msg.caption or "").strip()
+    if not caption:
+        await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением).")
         return
 
-    date_str = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d.%m.%Y")
-    try:
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("✅ /checkin", callback_data="checkin")]]
-        )
-        await app.bot.send_message(
-            chat_id=GROUP_CHAT_ID,
-            text=(
-                "🌅 *Доброе утро!*\n\n"
-                f"📅 {date_str}\n\n"
-                "💪 Нажми кнопку ниже (или напиши `/checkin`), затем *ответь на сообщение бота* фото/скрином с подписью — "
-                "и я отмечу тебя.\n\n"
-                "Каждый день — маленький шаг к цели. Поехали! 🚀"
-            ),
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
-        logger.info("Daily reminder sent to group %s", GROUP_CHAT_ID)
-    except Exception as e:
-        logger.error("Failed to send daily reminder: %s", e)
-
-def _user_mention_md(user) -> str:
-    name = (user.full_name or user.first_name or "user").replace("[", "(").replace("]", ")")
-    return f"[{name}](tg://user?id={user.id})"
-
-
-def _user_mention_html(user) -> str:
-    name = html.escape(user.full_name or user.first_name or "user")
-    return f'<a href="tg://user?id={user.id}">{name}</a>'
-
-
-async def _start_checkin_prompt(message, user, bot, bot_data) -> None:
-    """Send (and track) a per-user prompt message to reply to with image+caption."""
-    now = datetime.now(pytz.timezone(TIMEZONE))
-
-    pending = bot_data.get("pending_checkins")
-    if not isinstance(pending, dict):
-        pending = {}
-        bot_data["pending_checkins"] = pending
-
-    prompt_text = (
-        f"{_user_mention_html(user)}, ответь на это сообщение <b>фото/скрином</b> и добавь "
-        f"<b>подпись</b> — чем ты занимался(ась) сегодня."
-    )
-    try:
-        # PTB v21 uses reply_parameters under the hood; avoid allow_sending_without_reply here.
-        prompt = await message.reply_text(prompt_text, parse_mode="HTML")
-    except Exception:
-        # Fallback: send as a normal message if replying fails for any reason
-        prompt = await bot.send_message(
-            chat_id=message.chat_id,
-            text="Ок! Ответь фото/скрином с подписью.",
-        )
-
-    pending[str(user.id)] = {
-        "chat_id": message.chat_id,
-        "prompt_message_id": prompt.message_id,
-        "expires_at": now.timestamp() + PENDING_CHECKIN_TTL_SECONDS,
-    }
-
-    # Auto-delete prompt after TTL if user doesn't reply in time
-    async def _timeout_cleanup():
-        await asyncio.sleep(PENDING_CHECKIN_TTL_SECONDS)
-        pending_now = bot_data.get("pending_checkins") or {}
-        entry = pending_now.get(str(user.id))
-        if not entry:
-            return
-        if entry.get("prompt_message_id") != prompt.message_id or entry.get("chat_id") != message.chat_id:
-            return
-        try:
-            await bot.delete_message(chat_id=message.chat_id, message_id=prompt.message_id)
-        except Exception:
-            pass
-        pending_now.pop(str(user.id), None)
-
-    asyncio.create_task(_timeout_cleanup())
-
-
-async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Group command: start check-in prompt (same as button)."""
-    msg = update.message
-    if not msg:
-        return
-    if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
-        return
-    await _start_checkin_prompt(
-        message=msg,
-        user=update.effective_user,
-        bot=context.bot,
-        bot_data=context.application.bot_data,
-    )
-
-
-async def handle_checkin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline button click: start check-in prompt (same as /checkin)."""
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    msg = query.message
-    if not msg:
-        return
-
-    if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
-        return
-
-    data = (query.data or "").strip()
-    # Backward-compatible: older pinned messages used "start_checkin"
-    if data not in {"checkin", "start_checkin"}:
-        return
-
-    user = query.from_user
-
-    bot_data = context.application.bot_data
-    await query.answer("Ок! Ответь фото/скрином с подписью.", show_alert=False)
-    await _start_checkin_prompt(
-        message=msg,
-        user=user,
-        bot=context.bot,
-        bot_data=bot_data,
-    )
+    await msg.reply_text(_next_praise(context.application.bot_data))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -594,18 +255,15 @@ def main():
         # Ensure we are not fighting with an old webhook/polling session during redeploys.
         try:
             await app.bot.delete_webhook(drop_pending_updates=True)
-            await asyncio.sleep(2)
         except Exception as e:
             logger.warning("Failed to delete webhook: %s", e)
 
         # Register commands so Telegram shows them in UI for DMs and groups
         private_cmds = [
-            BotCommand("start", "Начать регистрацию"),
-            BotCommand("cancel", "Отменить регистрацию"),
+            BotCommand("start", "Как пользоваться ботом"),
         ]
         group_cmds = [
-            BotCommand("checkin", "✅ Отметить тренировку"),
-            BotCommand("stats", "📊 Сколько отметилось сегодня"),
+            BotCommand("start", "Как пользоваться ботом"),
         ]
         try:
             await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
@@ -618,28 +276,11 @@ def main():
     async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         # PTB can call error handlers with update=None.
         err = getattr(context, "error", None)
-        if err is not None:
-            logger.error("Unhandled error while processing update: %r", update, exc_info=err)
-        else:
-            logger.error("Unhandled error while processing update: %r", update)
+        if err is None:
+            return
+        logger.error("Unhandled error while processing update: %r", update, exc_info=err)
 
-    # Registration conversation
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", cmd_start)],
-        states={
-            SPORT: [CallbackQueryHandler(sport_chosen, pattern="^sport_")],
-            LEVEL: [CallbackQueryHandler(level_chosen, pattern="^level_")],
-            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, email_received)],
-        },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
-        allow_reentry=True,
-        per_message=True,
-    )
-
-    app.add_handler(conv)
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("checkin", cmd_checkin))
-    app.add_handler(CallbackQueryHandler(handle_checkin_button, pattern="^(checkin|start_checkin)$"))
+    app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(
         MessageHandler(
             (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
@@ -647,20 +288,6 @@ def main():
         )
     )
     app.add_error_handler(_on_error)
-
-    # Daily scheduler
-    tz = pytz.timezone(TIMEZONE)
-    hour, minute = map(int, NOTIFY_TIME.split(":"))
-    scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(
-        daily_reminder,
-        trigger="cron",
-        hour=hour,
-        minute=minute,
-        args=[app],
-    )
-    scheduler.start()
-    logger.info("Scheduler started — daily reminder at %s %s", NOTIFY_TIME, TIMEZONE)
 
     logger.info("Bot is running…")
     app.run_polling(
