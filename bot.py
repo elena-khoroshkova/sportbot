@@ -5,6 +5,8 @@ import random
 from telegram import Update, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import re
+import asyncio
+from telegram import Bot
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 class _RedactTokenFilter(logging.Filter):
@@ -214,6 +216,18 @@ def _next_praise(bot_data: dict) -> str:
         bot_data["_praise_bag"] = bag
     return bag.pop()
 
+
+def _is_image_document(msg) -> bool:
+    doc = msg.document
+    if not doc:
+        return False
+    mime = (doc.mime_type or "").lower()
+    if mime.startswith("image/"):
+        return True
+    name = (doc.file_name or "").lower()
+    return name.endswith((".png", ".jpg", ".jpeg", ".webp"))
+
+
 # ── Bot handlers ──────────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,13 +248,13 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
         return
 
-    has_image = bool(msg.photo) or (msg.document and (msg.document.mime_type or "").lower().startswith("image/"))
+    has_image = bool(msg.photo) or _is_image_document(msg)
     if not has_image:
         return
 
     caption = (msg.caption or "").strip()
     if not caption:
-        await msg.reply_text("⚠️ Добавь подпись к фото/скрину (одним сообщением).")
+        await msg.reply_text("⚠️ Добавь подпись к фото/скрину (caption одним сообщением).")
         return
 
     await msg.reply_text(_next_praise(context.application.bot_data))
@@ -249,14 +263,15 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
+    # If something (e.g. Albato) enabled webhook, polling will fail with Conflict.
+    # Delete webhook *before* starting the application/updater.
+    try:
+        asyncio.run(Bot(BOT_TOKEN).delete_webhook(drop_pending_updates=True))
+    except Exception as e:
+        logger.warning("Preflight delete_webhook failed: %s", e)
+
     async def post_init(app: Application):
         logger.info("App version: %s", APP_VERSION)
-
-        # Ensure we are not fighting with an old webhook/polling session during redeploys.
-        try:
-            await app.bot.delete_webhook(drop_pending_updates=True)
-        except Exception as e:
-            logger.warning("Failed to delete webhook: %s", e)
 
         # Register commands so Telegram shows them in UI for DMs and groups
         private_cmds = [
