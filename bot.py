@@ -228,6 +228,28 @@ def _is_image_document(msg) -> bool:
     return name.endswith((".png", ".jpg", ".jpeg", ".webp"))
 
 
+def _has_supported_media(msg) -> bool:
+    """Return True if message contains photo/video/gif (animation) or media as a document."""
+    if msg.photo:
+        return True
+    if msg.video:
+        return True
+    if msg.animation:
+        return True
+
+    doc = msg.document
+    if not doc:
+        return False
+
+    mime = (doc.mime_type or "").lower()
+    if mime.startswith(("image/", "video/")):
+        return True
+
+    # Best-effort fallback for clients that omit mime_type
+    name = (doc.file_name or "").lower()
+    return name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".m4v", ".webm"))
+
+
 # ── Bot handlers ──────────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -248,13 +270,16 @@ async def handle_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if GROUP_CHAT_ID and str(msg.chat_id) != str(GROUP_CHAT_ID):
         return
 
-    has_image = bool(msg.photo) or _is_image_document(msg)
-    if not has_image:
+    if not _has_supported_media(msg):
         return
 
     caption = (msg.caption or "").strip()
     if not caption:
-        await msg.reply_text("⚠️ Добавь подпись к фото/скрину (caption одним сообщением).")
+        # Albums (multiple photos/videos) arrive as a media group: only one item usually has the caption.
+        # Don't nag on the other items without caption.
+        if getattr(msg, "media_group_id", None):
+            return
+        await msg.reply_text("⚠️ Добавь подпись к фото/видео/гифке (caption одним сообщением).")
         return
 
     await msg.reply_text(_next_praise(context.application.bot_data))
@@ -298,7 +323,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(
         MessageHandler(
-            (filters.PHOTO | filters.Document.ALL) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+            (filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Document.ALL)
+            & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
             handle_group_image,
         )
     )
